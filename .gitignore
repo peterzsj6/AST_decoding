@@ -1,0 +1,13 @@
+# Large model artifacts (often >1GB)
+*.safetensors
+*.ckpt
+*.pt
+*.bin
+*.tar
+*.zip
+*.npz
+*.npy
+
+# Explicitly ignore the current checkpoint
+model.safetensors
+
