@@ -442,7 +442,7 @@ def setup_lora_training(
     # Set up TensorBoard logging
     if log_dir is None:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_dir = f"/data/home/zhangsj/qwen_coder_1.5b/tensorboard_logs/peft_lora_{model.embedding_type}_{timestamp}"
+        log_dir = f"/data/home/zhangsj/AST_decoding/tensorboard_logs/peft_lora_{model.embedding_type}_{timestamp}"
     
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir)
@@ -736,7 +736,7 @@ def train_lora_model(training_setup, num_epochs=5, save_steps=500, log_steps=50)
             
             # Save checkpoint
             if step % save_steps == 0:
-                checkpoint_path = f"/data/home/zhangsj/qwen_coder_1.5b/checkpoints_peft_lora_{trail_name}/checkpoint_step_{step}"
+                checkpoint_path = f"/data/home/zhangsj/AST_decoding/checkpoints_peft_lora_{trail_name}/checkpoint_step_{step}"
                 os.makedirs(checkpoint_path, exist_ok=True)
                 
                 model.save_pretrained(checkpoint_path)
@@ -779,13 +779,13 @@ def train_lora_model(training_setup, num_epochs=5, save_steps=500, log_steps=50)
         # Save best model
         if avg_epoch_loss < best_loss:
             best_loss = avg_epoch_loss
-            best_model_path = f"/data/home/zhangsj/qwen_coder_1.5b/best_peft_lora_span_aware_{trail_name}"
+            best_model_path = f"/data/home/zhangsj/AST_decoding/best_peft_lora_span_aware_{trail_name}"
             model.save_pretrained(best_model_path)
             tokenizer.save_pretrained(best_model_path)
             print(f"   🏆 New best PEFT LoRA model saved: {best_model_path} (loss: {best_loss:.4f})")
     
     # Save final model
-    final_path = f"/data/home/zhangsj/qwen_coder_1.5b/finetuned_peft_lora_span_aware_{trail_name}"
+    final_path = f"/data/home/zhangsj/AST_decoding/finetuned_peft_lora_span_aware_{trail_name}"
     model.save_pretrained(final_path)
     tokenizer.save_pretrained(final_path)
     
@@ -844,7 +844,7 @@ def train_lora_model(training_setup, num_epochs=5, save_steps=500, log_steps=50)
     
     print(f"\n✅ PEFT LORA TRAINING COMPLETED!")
     print(f"   Final model: {final_path}")
-    print(f"   Best model: /data/home/zhangsj/qwen_coder_1.5b/best_peft_lora_span_aware_{trail_name}")
+    print(f"   Best model: /data/home/zhangsj/AST_decoding/best_peft_lora_span_aware_{trail_name}")
     print(f"   Total steps: {step:,}")
     # Note: loss and total_loss from last iteration
     try:

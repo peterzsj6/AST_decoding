@@ -9,7 +9,7 @@ No complex configuration needed - just run it.
 
 import os
 # Set CUDA_VISIBLE_DEVICES before importing torch to ensure GPU 1 is used
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import torch
 from lora_span_aware_model import (
@@ -33,7 +33,7 @@ def main():
     # Configuration
     config = {
         'embedding_approach': 'mean_pooling',  # Options: 'mean_pooling', 'mean_pooling_only', 'span_type_only', 'multi_component', 'placeholder'
-        'trail_name': 'peft_lora_v2_11_6_mean_pooling',
+        'trail_name': 'peft_lora_v2_11_16_mean_pooling',
         'parquet_files': [
             '/data/home/zhangsj/Data/more_big_code_language/python/python_ast_parsed.parquet'
         ],
@@ -107,7 +107,7 @@ def main():
         
         print(f"\n🎉 PEFT LORA TRAINING COMPLETED SUCCESSFULLY!")
         print(f"   Check TensorBoard logs: {training_setup['log_dir']}")
-        print(f"   Best model saved to: /data/home/zhangsj/qwen_coder_1.5b/best_peft_lora_span_aware_{config['trail_name']}")
+        print(f"   Best model saved to: /data/home/zhangsj/AST_decoding/best_peft_lora_span_aware_{config['trail_name']}")
         
         # Memory cleanup
         del lora_model

@@ -11,3 +11,12 @@
 # Explicitly ignore the current checkpoint
 model.safetensors
 
+
+
+# Checkpoint directories
+checkpoints/
+*checkpoint*/
+*finetuned*/
+best_peft_lora*/
+tensorboard_logs/
+__pycache__/
