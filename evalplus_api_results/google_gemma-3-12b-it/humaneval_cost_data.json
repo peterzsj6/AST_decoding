@@ -1,0 +1,17 @@
+{
+  "HumanEval/10": {
+    "cost": 3.54e-05,
+    "tokens_in": 157,
+    "tokens_out": 224
+  },
+  "HumanEval/0": {
+    "cost": 3e-05,
+    "tokens_in": 139,
+    "tokens_out": 188
+  },
+  "HumanEval/1": {
+    "cost": 3.5839999999999996e-05,
+    "tokens_in": 129,
+    "tokens_out": 236
+  }
+}

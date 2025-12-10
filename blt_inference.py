@@ -3,7 +3,8 @@ import sys
 import argparse
 import torch
 import torch.nn.functional as F
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple, Set, DefaultDict
+from collections import defaultdict
 
 # Make project root importable
 PROJECT_ROOT = "/data/home/zhangsj"
@@ -46,22 +47,60 @@ def select_dtype(device: str, preferred_dtype: str = "auto") -> torch.dtype:
 
 def load_adapter_and_tokenizer(checkpoint_path: Optional[str], model_path: str, device: str, dtype: torch.dtype, peft_adapter: Optional[str] = None) -> (BLTAdapterModel, Any):
     if checkpoint_path and os.path.isdir(checkpoint_path):
-        # Load from saved checkpoint
-        tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
-        base = BLTAdapterModel.from_pretrained(checkpoint_path, torch_dtype=dtype)
-        adapter = PeftModel.from_pretrained(base, peft_adapter) if (peft_adapter and os.path.isdir(peft_adapter)) else base
+        # Prefer loading tokenizer from checkpoint, fallback to model_path
         try:
-            adapter = adapter.to(device=device, dtype=dtype)
+            tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
+        except Exception:
+            tokenizer = AutoTokenizer.from_pretrained(model_path)
+        # Try standard HF load; if it fails, fallback to state_dict on a freshly created adapter
+        adapter = None
+        load_error: Optional[Exception] = None
+        try:
+            base = BLTAdapterModel.from_pretrained(checkpoint_path, torch_dtype=dtype)  # type: ignore[arg-type]
+            adapter = PeftModel.from_pretrained(base, peft_adapter) if (peft_adapter and os.path.isdir(peft_adapter)) else base  # type: ignore[assignment]
+        except Exception as e:
+            load_error = e
+            # Robust fallback: instantiate adapter from base path then load state_dict with strict=False
+            base = create_blt_adapter_model(model_path)
+            state_path_bin = os.path.join(checkpoint_path, "pytorch_model.bin")
+            state_path_safetensors = os.path.join(checkpoint_path, "model.safetensors")
+            state_dict = None
+            if os.path.isfile(state_path_bin):
+                state_dict = torch.load(state_path_bin, map_location="cpu")
+            elif os.path.isfile(state_path_safetensors):
+                try:
+                    from safetensors.torch import load_file as load_safetensors  # type: ignore
+                    state_dict = load_safetensors(state_path_safetensors)
+                except Exception:
+                    state_dict = None
+            if state_dict is not None:
+                try:
+                    model_sd = base.state_dict()
+                    filtered_state = {}
+                    skipped = []
+                    for k, v in state_dict.items():
+                        if k in model_sd and model_sd[k].shape == v.shape:
+                            filtered_state[k] = v
+                        else:
+                            skipped.append(k)
+                    if len(filtered_state) > 0:
+                        base.load_state_dict(filtered_state, strict=False)
+                except Exception:
+                    pass
+            adapter = PeftModel.from_pretrained(base, peft_adapter) if (peft_adapter and os.path.isdir(peft_adapter)) else base  # type: ignore[assignment]
+        # Move to device with graceful OOM fallback
+        try:
+            adapter = adapter.to(device=device, dtype=dtype)  # type: ignore[union-attr]
         except RuntimeError as e:
-            # Graceful fallback to CPU on CUDA OOM
             if "out of memory" in str(e).lower() and device == "cuda":
                 try:
                     torch.cuda.empty_cache()
                 except Exception:
                     pass
-                adapter = adapter.to(device="cpu", dtype=torch.float32)
+                adapter = adapter.to(device="cpu", dtype=torch.float32)  # type: ignore[union-attr]
             else:
-                raise
+                # If both HF and fallback failed earlier, raise the root error; else raise this
+                raise load_error or e
     else:
         # Fresh adapter wrapping base model_path
         tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -112,6 +151,62 @@ def compute_entropy(logits: torch.Tensor) -> float:
     return ent
 
 
+def _build_no_repeat_ngram_index(sequence: List[int], n: int) -> DefaultDict[Tuple[int, ...], Set[int]]:
+    """
+    Build mapping: (n-1)-gram prefix -> set(next_token) observed in the sequence.
+    """
+    index: DefaultDict[Tuple[int, ...], Set[int]] = defaultdict(set)
+    if n <= 0 or len(sequence) < n:
+        return index
+    for i in range(len(sequence) - n + 1):
+        prefix = tuple(sequence[i:i + n - 1])
+        next_tok = sequence[i + n - 1]
+        index[prefix].add(next_tok)
+    return index
+
+
+def _apply_repetition_penalty_and_ngram_blocking(
+    logits: torch.Tensor,
+    generated_ids: torch.Tensor,
+    repetition_penalty: float = 1.0,
+    no_repeat_ngram_size: int = 0,
+) -> torch.Tensor:
+    """
+    Apply CTRL-style repetition penalty and HF-style no-repeat-ngram blocking in-place on logits.
+    logits: [1, V]
+    generated_ids: [1, T]
+    """
+    if logits.dim() != 2 or logits.size(0) != 1:
+        return logits
+    if generated_ids is None or generated_ids.numel() == 0:
+        return logits
+
+    logits_view = logits[0]
+
+    # 1) Repetition penalty (CTRL): penalize tokens that already appeared
+    if repetition_penalty and repetition_penalty > 1.0:
+        unique_ids = set(int(t) for t in generated_ids[0].tolist())
+        if len(unique_ids) > 0:
+            token_logits = logits_view[torch.tensor(list(unique_ids), device=logits.device, dtype=torch.long)]
+            neg_mask = token_logits < 0
+            token_logits[neg_mask] = token_logits[neg_mask] * repetition_penalty
+            token_logits[~neg_mask] = token_logits[~neg_mask] / repetition_penalty
+            logits_view.scatter_(0, torch.tensor(list(unique_ids), device=logits.device, dtype=torch.long), token_logits)
+
+    # 2) No-repeat-ngram blocking (HF): forbid tokens that would close an already seen n-gram
+    if no_repeat_ngram_size and no_repeat_ngram_size > 0 and generated_ids.size(1) >= no_repeat_ngram_size - 1:
+        seq_list = generated_ids[0].tolist()
+        n = int(no_repeat_ngram_size)
+        index = _build_no_repeat_ngram_index(seq_list, n)
+        prefix = tuple(seq_list[-(n - 1):]) if n > 1 else tuple()
+        banned: Set[int] = index.get(prefix, set())
+        if banned:
+            banned_idx = torch.tensor(list(banned), device=logits.device, dtype=torch.long)
+            logits_view.index_fill_(0, banned_idx, float("-inf"))
+
+    return logits
+
+
 def is_inside_docstring(tokenizer, input_ids: torch.Tensor) -> bool:
     """
     Heuristic: we're inside a triple-quoted docstring if the decoded text has an odd
@@ -126,20 +221,41 @@ def is_inside_docstring(tokenizer, input_ids: torch.Tensor) -> bool:
     return (dq % 2 == 1) or (sq % 2 == 1)
 
 
+def is_inside_comment(tokenizer, input_ids: torch.Tensor) -> bool:
+    """
+    Simple heuristic treating the current line as a comment if it starts with '#'.
+    """
+    try:
+        text = tokenizer.decode(input_ids[0], skip_special_tokens=True)
+    except Exception:
+        return False
+    lines = text.split("\n")
+    if not lines:
+        return False
+    last_line = lines[-1]
+    stripped = last_line.lstrip()
+    return stripped.startswith("#")
+
+
 @torch.no_grad()
 def incremental_generate(
     model: BLTAdapterModel,
     tokenizer,
     prompt_text: str,
     max_new_tokens: int = 128,
-    patcher: str = "none",  # none|heuristic|entropy|learned
+    patcher: str = "learned",  # none|heuristic|entropy|learned
     entropy_threshold: float = 4.0,
     max_patch_len: int = 32,
     temperature: float = 0.0,
     top_p: float = 1.0,
+    repetition_penalty: float = 1.0,
+    no_repeat_ngram_size: int = 0,
     boundary_threshold: float = 0.7,
     min_steps_between_patches: int = 8,
     disable_patching_in_docstring: bool = True,
+    collect_stats: bool = False,
+    use_local_decoder: bool = True,  # Enable local decoder for span refinement
+    local_decoder_mode: str = "generate",  # "generate" = from scratch, "refine" = use global tokens as prefix
 ) -> str:
     enc = tokenizer(
         prompt_text,
@@ -178,98 +294,259 @@ def incremental_generate(
         probs = F.softmax(logits, dim=-1)
         return int(torch.multinomial(probs, 1).item())
 
-    new_tokens = 0
-    eos_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else getattr(model.config, "eos_token_id", None)
-    steps_since_patch = 1_000_000  # large to allow first eligible patch
-
-    while new_tokens < max_new_tokens:
-        # Global step: get logits and hidden state for last token
-        outputs = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=True
-        )
-        logits = outputs.logits[:, -1, :]  # [1, V]
-        last_hidden = outputs.hidden_states[-1][:, -1, :]  # [1, H]  type: ignore[attr-defined]
-        # Proactively free large hidden_states collection before branching
+    # Build banned token ids (comments/docstrings)
+    banned_ids: List[int] = []
+    for tok_str in ["#", '"""', "'''"]:
         try:
-            del outputs
+            tid = tokenizer.convert_tokens_to_ids(tok_str)
+            if isinstance(tid, int) and tid >= 0:
+                banned_ids.append(tid)
         except Exception:
             pass
+    try:
+        for tid in range(len(tokenizer)):
+            if tid in banned_ids:
+                continue
+            txt = tokenizer.decode([tid], skip_special_tokens=True)
+            if ("#") in txt or '"""' in txt or "'''" in txt:
+                banned_ids.append(tid)
+    except Exception:
+        pass
+    banned_ids = sorted(set(banned_ids))
 
-        # Decide boundary
-        do_patch = False
-        boundary_confidence = None
-        # Optional guard: avoid patching inside triple-quoted docstrings
-        if not (disable_patching_in_docstring and is_inside_docstring(tokenizer, input_ids)):
-            if patcher == "none":
-                do_patch = False
-            elif patcher == "heuristic":
-                if input_ids.size(1) > 0:
-                    prev_id = int(input_ids[0, -1].item())
-                    do_patch = is_boundary_heuristic(tokenizer, prev_id)
-            elif patcher == "entropy":
-                ent = compute_entropy(logits[0])
-                # High entropy -> start of a hard boundary (use local decoder after)
-                do_patch = ent > entropy_threshold
-            elif patcher == "learned":
-                # Use boundary_head on last_hidden
-                with torch.no_grad():
-                    boundary_logits = model.boundary_head(last_hidden)  # [1, 2]
-                    probs = torch.softmax(boundary_logits, dim=-1)
-                    boundary_confidence = float(probs[0, 1].item())
-                    # Patch only if confident enough AND we have spaced out recent patches
-                    do_patch = (boundary_confidence >= boundary_threshold) and (steps_since_patch >= int(min_steps_between_patches))
-            else:
-                do_patch = False
+    new_tokens = 0
+    eos_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else getattr(model.config, "eos_token_id", None)
+    steps_since_patch = 1_000_000
+    node_buffer: List[int] = []
+    current_node_start_idx = 0
 
-        if do_patch:
-            # Predict span latent and decode locally
-            span_latent = model.latent_from_global(last_hidden)  # [1, H]
-            patch_ids = model.generate_node_tokens(span_latent.squeeze(0), max_len=max_patch_len)  # [T]
-            if patch_ids.numel() == 0:
-                # Fallback to single token
-                next_id = int(torch.argmax(logits, dim=-1).item())
-                append_tokens([next_id])
-                new_tokens += 1
-                steps_since_patch += 1
+    finalized_any = False
+    boundary_triggered = False
+
+    def finalize_completed_node(global_hidden_seq: torch.Tensor, include_last_token: bool = False):
+        nonlocal input_ids, attention_mask, node_buffer, current_node_start_idx, new_tokens, finalized_any
+        span_len = len(node_buffer) if include_last_token else len(node_buffer) - 1
+        if span_len <= 0 or current_node_start_idx + span_len > input_ids.size(1):
+            if not include_last_token and node_buffer:
+                node_buffer[:] = node_buffer[-1:]
+                current_node_start_idx = input_ids.size(1) - len(node_buffer)
             else:
-                append_tokens(patch_ids.tolist())
-                new_tokens += int(patch_ids.numel())
-                steps_since_patch = 0
-                if eos_id is not None and int(patch_ids[-1].item()) == eos_id:
-                    break
+                node_buffer.clear()
+                current_node_start_idx = input_ids.size(1)
+            return
+        if span_len > max_patch_len:
+            current_node_start_idx = current_node_start_idx + span_len
+            node_buffer.clear()
+            return
+        start = current_node_start_idx
+        end = start + span_len
+        span_ids = input_ids[:, start:end]
+
+        if use_local_decoder:
+            # === LOCAL DECODER path ===
+            # 1) Local encoder to get span memory (cross-attn input)
+            try:
+                span_memory = model.node_token_encoder(span_ids)
+            except Exception:
+                span_memory = None
+            span_mask = None
+            if span_memory is not None:
+                span_mask = torch.zeros(span_memory.size(1), dtype=torch.bool, device=device)
+
+            # 2) Predict span latent from global hidden at boundary (matches training latent_from_global path)
+            global_hidden_at_start = global_hidden_seq[0, start, :]  # [H]
+            with torch.no_grad():
+                span_latent = model.latent_from_global(global_hidden_at_start.unsqueeze(0)).squeeze(0)  # [H]
+
+            # 3) Provide global memory for cross-attn + residual
+            global_memory = global_hidden_seq[:, :end, :]  # [1, end, H]
+            global_hidden_last = global_hidden_seq[0, end - 1, :]  # [H]
+            global_kpm = None
+            try:
+                global_kpm = ~attention_mask[:, :end].squeeze(0).to(torch.bool)
+            except Exception:
+                global_kpm = None
+
+            # 4) Decode node tokens using local decoder; refine by conditioning on original span tokens
+            prefix_ids = span_ids[0]  # original span tokens
+            with torch.no_grad():
+                decoded_ids = model.generate_node_tokens(
+                    span_latent=span_latent,
+                    span_memory=span_memory.squeeze(0) if span_memory is not None else None,
+                    span_key_padding_mask=span_mask if span_mask is not None else None,
+                    global_hidden=global_hidden_last,
+                    global_memory=global_memory.squeeze(0),
+                    global_key_padding_mask=global_kpm,
+                    max_len=span_len,
+                    prefix_ids=prefix_ids,
+                    num_new_tokens=0,  # rewrite conditioned on prefix; no extension
+                    bos_id=None,
+                    eos_id=eos_id,
+                )
+
+            if decoded_ids.numel() > 0:
+                new_node_tensor = decoded_ids.unsqueeze(0).to(device=device, dtype=input_ids.dtype)
+            else:
+                new_node_tensor = span_ids.to(device=device, dtype=input_ids.dtype)
         else:
-            # Single global token step
+            # Default: just keep the global tokens (no local decoder refinement)
+            new_node_tensor = span_ids.to(device=device, dtype=input_ids.dtype)
+        
+        before = input_ids[:, :start]
+        after = input_ids[:, end:]
+        input_ids = torch.cat([before, new_node_tensor, after], dim=1)
+        attention_mask = torch.ones_like(input_ids)
+        length_delta = new_node_tensor.size(1) - span_len
+        if length_delta > 0:
+            new_tokens += length_delta
+        if include_last_token:
+            node_buffer.clear()
+            current_node_start_idx = before.size(1) + new_node_tensor.size(1)
+        else:
+            node_buffer[:] = node_buffer[-1:]
+            current_node_start_idx = before.size(1) + new_node_tensor.size(1)
+        finalized_any = True
+        boundary_triggered = True
+
+    def recompute_hidden_states():
+        with torch.no_grad():
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                output_hidden_states=True,
+                )
+        return outputs.logits[:, -1, :], outputs.hidden_states[-1]  # type: ignore[attr-defined]
+
+    logits, global_hidden_seq = recompute_hidden_states()
+    last_hidden = global_hidden_seq[:, -1, :]
+    logits_valid = True
+    fired_boundaries = 0
+    total_tokens = 0
+
+    def ensure_fresh_states():
+        nonlocal logits, global_hidden_seq, last_hidden, logits_valid
+        if not logits_valid:
+            logits, global_hidden_seq = recompute_hidden_states()
+            last_hidden = global_hidden_seq[:, -1, :]
+            logits_valid = True
+
+    while new_tokens < max_new_tokens:
+        ensure_fresh_states()
+
+        boundary_confidence = None
+        entropy_score = None
+        if patcher == "entropy":
+            entropy_score = compute_entropy(logits[0])
+        if patcher == "learned":
+            with torch.no_grad():
+                boundary_logits = model.boundary_head(last_hidden)
+                probs = torch.softmax(boundary_logits, dim=-1)
+                boundary_confidence = float(probs[0, 1].item())
+
+        if banned_ids:
+            logits[:, banned_ids] = float("-inf")
+
+            logits = _apply_repetition_penalty_and_ngram_blocking(
+                logits=logits,
+                generated_ids=input_ids,
+                repetition_penalty=repetition_penalty,
+                no_repeat_ngram_size=no_repeat_ngram_size,
+            )
             if temperature <= 0.0 and top_p >= 1.0:
                 next_id = int(torch.argmax(logits, dim=-1).item())
             else:
                 next_id = sample_from_logits(logits)
             append_tokens([next_id])
-            new_tokens += 1
-            steps_since_patch += 1
-            if eos_id is not None and next_id == eos_id:
-                break
+        node_buffer.append(next_id)
+        current_node_start_idx = input_ids.size(1) - len(node_buffer)
+        new_tokens += 1
+        steps_since_patch += 1
+        logits_valid = False
+        total_tokens += 1
 
-    return tokenizer.decode(input_ids[0], skip_special_tokens=True)
+        textual_guard = False
+        if disable_patching_in_docstring:
+            try:
+                inside_doc = is_inside_docstring(tokenizer, input_ids)
+            except Exception:
+                inside_doc = False
+            try:
+                inside_comment = is_inside_comment(tokenizer, input_ids)
+            except Exception:
+                inside_comment = False
+            textual_guard = inside_doc or inside_comment
+        else:
+            inside_doc = False
+            inside_comment = False
+
+        if eos_id is not None and next_id == eos_id:
+            if not textual_guard and finalized_any:
+                ensure_fresh_states()
+                finalize_completed_node(global_hidden_seq, include_last_token=True)
+                logits_valid = False
+            # If nothing was ever finalized, keep the global output as-is
+            node_buffer.clear()
+            current_node_start_idx = input_ids.size(1)
+            break
+
+        is_new_node = False
+        if not textual_guard:
+            if patcher == "heuristic":
+                is_new_node = is_boundary_heuristic(tokenizer, next_id)
+            elif patcher == "entropy" and entropy_score is not None:
+                is_new_node = entropy_score > entropy_threshold
+            elif patcher == "learned" and boundary_confidence is not None:
+                is_new_node = (boundary_confidence >= boundary_threshold) and (steps_since_patch >= int(min_steps_between_patches))
+
+        if is_new_node:
+            ensure_fresh_states()
+            finalize_completed_node(global_hidden_seq, include_last_token=False)
+            steps_since_patch = 0
+            logits_valid = False
+            fired_boundaries += 1
+            continue
+
+        if textual_guard:
+            # Commit buffered tokens without local decoding
+            node_buffer.clear()
+            current_node_start_idx = input_ids.size(1)
+            ensure_fresh_states()
+            continue
+
+    if node_buffer:
+        guard_final = False
+        if disable_patching_in_docstring:
+            guard_final = is_inside_docstring(tokenizer, input_ids) or is_inside_comment(tokenizer, input_ids)
+        if not guard_final and finalized_any and boundary_triggered:
+            ensure_fresh_states()
+            finalize_completed_node(global_hidden_seq, include_last_token=True)
+        else:
+            node_buffer.clear()
+            current_node_start_idx = input_ids.size(1)
+    output = tokenizer.decode(input_ids[0], skip_special_tokens=True)
+    if collect_stats:
+        return output, {"fired_boundaries": fired_boundaries, "total_tokens": total_tokens}
+    return output
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BLT Adapter Inference with patchers")
-    parser.add_argument("--checkpoint", type=str, default="/data/home/zhangsj/AST_decoding/checkpoints/blt_adapter/blt_adapter_frozen_global_transformer_with_span_boundary_and_type_loss/epoch_3", help="Path to saved adapter checkpoint (optional)")
+    parser.add_argument("--checkpoint", type=str, default="/data/home/zhangsj/AST_decoding/checkpoints/blt_adapter/focused_sep_embedding_global_kv_residual_LM_NTP/epoch_10", help="Path to saved adapter checkpoint (optional)")
     parser.add_argument("--model_path", type=str, default="/data/home/zhangsj/AST_decoding", help="Base Qwen2.5 path if no checkpoint provided")
     parser.add_argument("--input_file", type=str, required=True, help="Source code file (python)")
     parser.add_argument("--max_new_tokens", type=int, default=128)
-    parser.add_argument("--patcher", type=str, default="none", choices=["none", "heuristic", "entropy", "learned"])
+    parser.add_argument("--patcher", type=str, default="learned", choices=["none", "global_only", "heuristic", "entropy", "learned"])
     parser.add_argument("--entropy_threshold", type=float, default=4.0)
     parser.add_argument("--max_patch_len", type=int, default=32)
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cuda", "cpu"])
     parser.add_argument("--dtype", type=str, default="auto", choices=["auto", "bf16", "fp16", "fp32"])
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top_p", type=float, default=1.0)
+    parser.add_argument("--repetition_penalty", type=float, default=1.0, help=">1.0 discourages reusing seen tokens")
+    parser.add_argument("--no_repeat_ngram_size", type=int, default=0, help="Block repeating n-grams of this size (0=disabled)")
     parser.add_argument("--peft_adapter", type=str, default="", help="Path to PEFT LoRA adapter directory (optional)")
     parser.add_argument("--boundary_threshold", type=float, default=0.7, help="Probability threshold for learned patcher to trigger a patch")
-    parser.add_argument("--min_steps_between_patches", type=int, default=8, help="Minimum global steps between two patches for learned patcher")
+    parser.add_argument("--min_steps_between_patches", type=int, default=1, help="Minimum global steps between two patches for learned patcher")
     parser.add_argument("--disable_patching_in_docstring", action="store_true", help="If set, prevents patching while inside triple-quoted docstrings")
     return parser.parse_args()
 
@@ -300,6 +577,8 @@ def main():
         max_patch_len=args.max_patch_len,
         temperature=args.temperature,
         top_p=args.top_p,
+        repetition_penalty=args.repetition_penalty,
+        no_repeat_ngram_size=args.no_repeat_ngram_size,
         boundary_threshold=args.boundary_threshold,
         min_steps_between_patches=args.min_steps_between_patches,
         disable_patching_in_docstring=args.disable_patching_in_docstring

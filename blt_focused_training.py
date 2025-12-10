@@ -12,7 +12,6 @@ No LM CE, KL, or InfoNCE losses - just the essentials for span decoding.
 from typing import Dict, List, Optional, Tuple
 import os
 if 'LOCAL_RANK' not in os.environ:
-    # Use GPU 0 by default (change if needed)
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import torch
 import torch.nn as nn
@@ -26,8 +25,24 @@ import argparse
 
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
 from torch.utils.tensorboard import SummaryWriter
 from transformers import AutoTokenizer
+
+
+def get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps, min_lr_ratio=0.1):
+    """
+    Cosine learning rate scheduler with linear warmup.
+    """
+    def lr_lambda(current_step):
+        if current_step < num_warmup_steps:
+            # Linear warmup
+            return float(current_step) / float(max(1, num_warmup_steps))
+        # Cosine decay
+        progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
+        return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
+    
+    return LambdaLR(optimizer, lr_lambda)
 
 # Import the model components
 from blt_adapter_model import (
@@ -210,7 +225,7 @@ def train_focused():
     Focused training loop with only essential losses for span decoding.
     """
     parser = argparse.ArgumentParser(description="Focused BLT Adapter Training")
-    parser.add_argument("--model_path", type=str, default="/data/home/zhangsj/AST_decoding")
+    parser.add_argument("--model_path", type=str, default="/data/home/zhangsj/qwen_coder_1.5b_instruct/checkpoint")
     parser.add_argument("--parquet", type=str, default="/data/home/zhangsj/Data/more_big_code_language/python/python_ast_parsed.parquet")
     parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--epochs", type=int, default=10)
@@ -219,18 +234,22 @@ def train_focused():
     parser.add_argument("--max_length", type=int, default=328)
     parser.add_argument("--dtype", type=str, default="auto", choices=["auto", "bf16", "fp16", "fp32"])
     parser.add_argument("--log_dir", type=str, default=None)
-    parser.add_argument("--trial_name", type=str, default="focused_global_concate_residual")
+    parser.add_argument("--trial_name", type=str, default="focused_sep_embedding_global_kv_residual_LM_NTP_instruct_basemodel")
     
     # Span filtering
     parser.add_argument("--min_span_len", type=int, default=1, help="Minimum span length in tokens")
     parser.add_argument("--max_span_len", type=int, default=64, help="Maximum span length in tokens")
     parser.add_argument("--filter_trivial_types", action="store_true", help="Filter out punctuation/operator spans")
-    parser.add_argument("--max_nodes_per_sample", type=int, default=16, help="Max nodes per sample for memory")
+    parser.add_argument("--max_nodes_per_sample", type=int, default=64, help="Max nodes per sample for memory")
     
     # Loss weights (only the 3 essential losses)
+    parser.add_argument("--lm_weight", type=float, default=0.05, help="Global LM CE loss weight")
+    parser.add_argument("--warmup_lm_weight", type=float, default=0.0, help="LM CE weight during warmup")
     parser.add_argument("--node_recon_weight", type=float, default=1.0)
     parser.add_argument("--boundary_weight", type=float, default=0.5)
-    parser.add_argument("--latent_mse_weight", type=float, default=0.3)
+    parser.add_argument("--latent_mse_weight", type=float, default=0.2)
+    parser.add_argument("--boundary_include_singles", action="store_true", default=False,
+                        help="If set, treat single-token spans as positives for boundary training")
     
     # Warmup
     parser.add_argument("--warmup_steps", type=int, default=500)
@@ -239,7 +258,23 @@ def train_focused():
     parser.add_argument("--warmup_mse_weight", type=float, default=0.2)
     
     # Gradient accumulation for effective larger batch
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=2)
+    
+    # LR Scheduler
+    parser.add_argument("--lr_scheduler", type=str, default="cosine", choices=["none", "cosine", "linear"],
+                        help="Learning rate scheduler type")
+    parser.add_argument("--lr_warmup_steps", type=int, default=500, help="LR warmup steps (separate from loss warmup)")
+    parser.add_argument("--min_lr_ratio", type=float, default=0.1, help="Minimum LR as ratio of initial LR")
+    
+    # Local decoder configuration
+    parser.add_argument("--local_num_layers", type=int, default=2, help="Number of local decoder layers")
+    
+    # Validation (use pre-parsed parquet file from preprocess_validation_data.py)
+    parser.add_argument("--val_split", type=float, default=0.0, help="Split this fraction from train for validation (default: 0, use HumanEval only)")
+    parser.add_argument("--humaneval_parquet", type=str,
+                        default="/data/home/zhangsj/Data/HumanEval/humaneval_ast_parsed.parquet",
+                        help="Path to pre-parsed HumanEval parquet for validation")
+    parser.add_argument("--eval_every_n_epochs", type=int, default=1, help="Run validation every N epochs")
     
     # Checkpoint loading
     parser.add_argument("--resume_from", type=str, default=None, help="Resume from checkpoint directory")
@@ -268,6 +303,29 @@ def train_focused():
         filter_trivial_types=args.filter_trivial_types,
     )
     
+    # Handle validation dataset
+    val_dataset = None
+    
+    # Option 1: Use pre-parsed HumanEval parquet (default)
+    if args.humaneval_parquet and os.path.exists(args.humaneval_parquet):
+        print(f"[Dataset] Loading HumanEval validation from: {args.humaneval_parquet}")
+        val_dataset = FocusedPythonASTSpanDataset(
+            args.humaneval_parquet,
+            tokenizer,
+            max_length=args.max_length,
+            min_span_len=args.min_span_len,
+            max_span_len=args.max_span_len,
+            filter_trivial_types=args.filter_trivial_types,
+        )
+    # Option 2: Split from training data (fallback)
+    elif args.val_split > 0:
+        from torch.utils.data import random_split
+        total_len = len(dataset)
+        val_len = int(total_len * args.val_split)
+        train_len = total_len - val_len
+        dataset, val_dataset = random_split(dataset, [train_len, val_len])
+        print(f"[Dataset] Train/val split: {train_len} train, {val_len} val")
+    
     # Create model
     if args.resume_from and os.path.isdir(args.resume_from):
         print(f"[setup] Resuming from checkpoint: {args.resume_from}")
@@ -275,9 +333,9 @@ def train_focused():
     else:
         adapter = create_blt_adapter_model(
             args.model_path,
-            local_num_layers=2,
+            local_num_layers=args.local_num_layers,
             max_node_length=args.max_span_len,
-            num_node_types=dataset.num_node_types
+            num_node_types=dataset.num_node_types if hasattr(dataset, 'num_node_types') else len(SPAN_TYPE_TO_ID)
         )
     
     # Device and dtype
@@ -305,14 +363,27 @@ def train_focused():
         pass
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     
-    # Disable LM loss, KL, InfoNCE by setting weights to 0
-    adapter.lm_loss_weight = 0.0
+    # Enable LM CE (NTP) for global transformer if requested; disable KL/InfoNCE
+    adapter.lm_loss_weight = float(args.lm_weight)
+    # Ensure LM CE flows gradients outside the model call if used directly from outputs.lm_ce
+    try:
+        adapter.expose_lm_ce_grad = True
+    except Exception:
+        pass
     adapter.kl_weight = 0.0
     adapter.infonce_weight = 0.0
     adapter.node_recon_loss_weight = args.node_recon_weight
     adapter.boundary_loss_weight = args.boundary_weight
     adapter.latent_mse_weight = args.latent_mse_weight
     adapter.max_nodes_per_sample = args.max_nodes_per_sample
+    # Boundary behavior: by default exclude singles; enable with flag
+    try:
+        adapter.boundary_include_singles = bool(args.boundary_include_singles)
+    except Exception:
+        pass
+    # Disable textual span clamping on boundary targets for this training run
+    if hasattr(adapter, "textual_span_type_ids"):
+        adapter.textual_span_type_ids = torch.tensor([], dtype=torch.long)
     
     # Freeze global transformer, train local decoder + boundary + latent_from_global
     trainable_params = []
@@ -343,6 +414,23 @@ def train_focused():
                 p.requires_grad = True
                 trainable_params.append(p)
     
+    # If LM CE is enabled, unfreeze last global transformer layer and lm_head for NTP
+    if float(adapter.lm_loss_weight) > 0.0:
+        try:
+            if hasattr(adapter, 'model') and hasattr(adapter.model, 'layers') and len(adapter.model.layers) > 0:
+                for p in adapter.model.layers[-1].parameters():
+                    p.requires_grad = True
+                    trainable_params.append(p)
+        except Exception:
+            pass
+        if hasattr(adapter, 'lm_head'):
+            try:
+                for p in adapter.lm_head.parameters():
+                    p.requires_grad = True
+                    trainable_params.append(p)
+            except Exception:
+                pass
+    
     # Also train the residual scale parameter
     if hasattr(adapter, 'global_residual_scale'):
         adapter.global_residual_scale.requires_grad = True
@@ -366,21 +454,57 @@ def train_focused():
                 p.requires_grad = True
                 trainable_params.append(p)
     
-    # DataLoader
+    # DataLoader (num_workers=0 to avoid issues with raw_spans list)
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=4,
+        num_workers=0,
         pin_memory=torch.cuda.is_available(),
         collate_fn=collate_fn,
         drop_last=True,
     )
     
+    # Validation DataLoader
+    val_dataloader = None
+    if val_dataset is not None:
+        val_dataloader = DataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=0,
+            pin_memory=torch.cuda.is_available(),
+            collate_fn=collate_fn,
+            drop_last=False,
+        )
+        print(f"[DataLoader] Validation: {len(val_dataloader)} batches")
+    
     # Optimizer
     if len(trainable_params) == 0:
         trainable_params = [p for p in adapter.parameters() if p.requires_grad]
     opt = AdamW(trainable_params, lr=args.lr, weight_decay=0.01)
+    
+    # Calculate total optimizer steps for scheduler
+    steps_per_epoch = len(dataloader) // args.gradient_accumulation_steps
+    total_optimizer_steps = args.epochs * steps_per_epoch
+    
+    # LR Scheduler
+    scheduler = None
+    if args.lr_scheduler == "cosine":
+        scheduler = get_cosine_schedule_with_warmup(
+            opt, 
+            num_warmup_steps=args.lr_warmup_steps,
+            num_training_steps=total_optimizer_steps,
+            min_lr_ratio=args.min_lr_ratio
+        )
+        print(f"[setup] Using cosine LR scheduler: warmup={args.lr_warmup_steps}, total={total_optimizer_steps}")
+    elif args.lr_scheduler == "linear":
+        def linear_lambda(step):
+            if step < args.lr_warmup_steps:
+                return float(step) / float(max(1, args.lr_warmup_steps))
+            return max(args.min_lr_ratio, 1.0 - (step - args.lr_warmup_steps) / float(max(1, total_optimizer_steps - args.lr_warmup_steps)))
+        scheduler = LambdaLR(opt, linear_lambda)
+        print(f"[setup] Using linear LR scheduler: warmup={args.lr_warmup_steps}, total={total_optimizer_steps}")
     
     # Logging
     writer = SummaryWriter(args.log_dir)
@@ -391,29 +515,70 @@ def train_focused():
     
     print(f"[setup] total_params={total_params:,} trainable={trainable_count:,} frozen={frozen_count:,}")
     print(f"[setup] batch_size={args.batch_size}, lr={args.lr}, dtype={dtype}")
-    print(f"[setup] Losses: node_recon={args.node_recon_weight}, boundary={args.boundary_weight}, latent_mse={args.latent_mse_weight}")
-    print(f"[setup] LM_CE=0, KL=0, InfoNCE=0 (disabled)")
+    print(f"[setup] Losses: lm_ce={adapter.lm_loss_weight}, node_recon={args.node_recon_weight}, boundary={args.boundary_weight}, latent_mse={args.latent_mse_weight}")
+    print(f"[setup] KL=0, InfoNCE=0 (disabled)")
+    print(f"[setup] boundary_include_singles={getattr(adapter, 'boundary_include_singles', False)}")
     
     writer.add_text("setup/config", str(vars(args)))
     writer.add_text("setup/trainable_params", str(trainable_count))
     
+    # Validation function
+    @torch.no_grad()
+    def run_validation(val_loader, epoch_num):
+        adapter.eval()
+        val_losses = {'total': [], 'lm_ce': [], 'node_recon': [], 'boundary': [], 'latent_mse': []}
+        
+        for batch in val_loader:
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            span_metadata = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in batch['span_metadata'].items()}
+            
+            outputs = adapter(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                span_metadata=span_metadata,
+                labels=input_ids
+            )
+            
+            loss = torch.zeros((), device=device, dtype=dtype)
+            if hasattr(outputs, 'lm_ce') and outputs.lm_ce is not None:
+                loss = loss + adapter.lm_loss_weight * outputs.lm_ce
+                val_losses['lm_ce'].append(float(outputs.lm_ce.item()))
+            if hasattr(outputs, 'node_recon_loss') and outputs.node_recon_loss is not None:
+                loss = loss + adapter.node_recon_loss_weight * outputs.node_recon_loss
+                val_losses['node_recon'].append(float(outputs.node_recon_loss.item()))
+            if hasattr(outputs, 'boundary_loss') and outputs.boundary_loss is not None:
+                loss = loss + adapter.boundary_loss_weight * outputs.boundary_loss
+                val_losses['boundary'].append(float(outputs.boundary_loss.item()))
+            if hasattr(outputs, 'latent_mse') and outputs.latent_mse is not None:
+                loss = loss + adapter.latent_mse_weight * outputs.latent_mse
+                val_losses['latent_mse'].append(float(outputs.latent_mse.item()))
+            val_losses['total'].append(float(loss.item()))
+        
+        adapter.train()
+        
+        avg_val = {k: np.mean(v) if v else 0 for k, v in val_losses.items()}
+        print(f"\n[Val Epoch {epoch_num}] total={avg_val['total']:.4f}, lm_ce={avg_val['lm_ce']:.4f}, node_recon={avg_val['node_recon']:.4f}, boundary={avg_val['boundary']:.4f}, latent_mse={avg_val['latent_mse']:.4f}")
+        return avg_val
+    
     # Training loop
     adapter.train()
     global_step = 0
-    steps_per_epoch = len(dataloader)
-    total_steps = args.epochs * steps_per_epoch
+    accumulated_loss = 0.0  # For accurate loss logging
     
     for epoch in range(args.epochs):
-        epoch_losses = {'total': [], 'node_recon': [], 'boundary': [], 'latent_mse': []}
+        epoch_losses = {'total': [], 'lm_ce': [], 'node_recon': [], 'boundary': [], 'latent_mse': []}
         
         for batch_idx, batch in enumerate(dataloader):
             # Warmup schedule
             if global_step < args.warmup_steps:
                 warmup_ratio = global_step / args.warmup_steps
+                adapter.lm_loss_weight = args.warmup_lm_weight + warmup_ratio * (args.lm_weight - args.warmup_lm_weight)
                 adapter.node_recon_loss_weight = args.warmup_node_weight + warmup_ratio * (args.node_recon_weight - args.warmup_node_weight)
                 adapter.boundary_loss_weight = args.warmup_boundary_weight + warmup_ratio * (args.boundary_weight - args.warmup_boundary_weight)
                 adapter.latent_mse_weight = args.warmup_mse_weight + warmup_ratio * (args.latent_mse_weight - args.warmup_mse_weight)
             else:
+                adapter.lm_loss_weight = args.lm_weight
                 adapter.node_recon_loss_weight = args.node_recon_weight
                 adapter.boundary_loss_weight = args.boundary_weight
                 adapter.latent_mse_weight = args.latent_mse_weight
@@ -432,26 +597,41 @@ def train_focused():
             # Compose loss manually from components (LM CE is disabled via weight=0)
             loss = torch.zeros((), device=device, dtype=dtype)
             
+            # Include global LM CE (NTP) if enabled
+            if hasattr(outputs, 'lm_ce') and outputs.lm_ce is not None:
+                loss = loss + adapter.lm_loss_weight * outputs.lm_ce
+                epoch_losses['lm_ce'].append(float(outputs.lm_ce.item()))
+            
             if hasattr(outputs, 'node_recon_loss') and outputs.node_recon_loss is not None:
                 loss = loss + adapter.node_recon_loss_weight * outputs.node_recon_loss
                 epoch_losses['node_recon'].append(float(outputs.node_recon_loss.item()))
             
             if hasattr(outputs, 'boundary_loss') and outputs.boundary_loss is not None:
-                loss = loss + adapter.boundary_loss_weight * outputs.boundary_loss
+                # Train boundary head separately (detached features); do not couple with main loss
                 epoch_losses['boundary'].append(float(outputs.boundary_loss.item()))
             
             if hasattr(outputs, 'latent_mse') and outputs.latent_mse is not None:
                 loss = loss + adapter.latent_mse_weight * outputs.latent_mse
                 epoch_losses['latent_mse'].append(float(outputs.latent_mse.item()))
             
-            epoch_losses['total'].append(float(loss.item()))
+            # Track unscaled loss for epoch average
+            unscaled_loss = float(loss.item())
+            epoch_losses['total'].append(unscaled_loss)
+            accumulated_loss += unscaled_loss  # For accurate logging
             
-            # Backward
+            # Backward (scaled for gradient accumulation)
             loss = loss / args.gradient_accumulation_steps
             loss.backward()
             
-            # Separate backward for probes (monitoring only)
+            # Separate backward for boundary head and probes (monitoring only)
             probe_total = None
+            # Boundary head backward (detached from rest of model)
+            if hasattr(outputs, 'boundary_loss') and outputs.boundary_loss is not None:
+                try:
+                    boundary_total = adapter.boundary_loss_weight * outputs.boundary_loss
+                    (boundary_total / args.gradient_accumulation_steps).backward()
+                except Exception:
+                    pass
             if hasattr(outputs, 'type_probe_encoder_loss') and outputs.type_probe_encoder_loss is not None:
                 probe_total = outputs.type_probe_encoder_loss
             if hasattr(outputs, 'type_probe_decoder_loss') and outputs.type_probe_decoder_loss is not None:
@@ -467,11 +647,40 @@ def train_focused():
                 torch.nn.utils.clip_grad_norm_(adapter.parameters(), 1.0)
                 opt.step()
                 opt.zero_grad()
+                
+                # Step LR scheduler
+                if scheduler is not None:
+                    scheduler.step()
+                
                 global_step += 1
+                
+                # Compute average loss over accumulated steps
+                avg_accumulated_loss = accumulated_loss / args.gradient_accumulation_steps
+                accumulated_loss = 0.0  # Reset for next accumulation
                 
                 # Logging
                 if global_step % 50 == 0:
-                    writer.add_scalar("loss/total", float(loss.item() * args.gradient_accumulation_steps), global_step)
+                    writer.add_scalar("loss/total", avg_accumulated_loss, global_step)
+                    
+                    # Log current learning rate
+                    current_lr = opt.param_groups[0]['lr']
+                    writer.add_scalar("lr/learning_rate", current_lr, global_step)
+                    # Boundary metrics
+                    if hasattr(outputs, 'boundary_acc'):
+                        writer.add_scalar("acc/boundary", float(outputs.boundary_acc.item()), global_step)
+                    if hasattr(outputs, 'boundary_start_recall'):
+                        writer.add_scalar("acc/boundary_start_recall", float(outputs.boundary_start_recall.item()), global_step)
+                    if hasattr(outputs, 'boundary_single_recall'):
+                        writer.add_scalar("acc/boundary_single_recall", float(outputs.boundary_single_recall.item()), global_step)
+                    if hasattr(outputs, 'boundary_pos_rate'):
+                        writer.add_scalar("stat/boundary_pos_rate", float(outputs.boundary_pos_rate.item()), global_step)
+                    if hasattr(outputs, 'boundary_pred_pos_rate'):
+                        writer.add_scalar("stat/boundary_pred_pos_rate", float(outputs.boundary_pred_pos_rate.item()), global_step)
+                    if hasattr(outputs, 'boundary_prob_mean'):
+                        writer.add_scalar("stat/boundary_prob_mean", float(outputs.boundary_prob_mean.item()), global_step)
+                    if hasattr(outputs, 'lm_ce') and outputs.lm_ce is not None:
+                        writer.add_scalar("loss/lm_ce", float(outputs.lm_ce.item()), global_step)
+                        writer.add_scalar("loss/lm_ce_weighted", float((adapter.lm_loss_weight * outputs.lm_ce).item()), global_step)
                     if hasattr(outputs, 'node_recon_loss') and outputs.node_recon_loss is not None:
                         writer.add_scalar("loss/node_recon", float(outputs.node_recon_loss.item()), global_step)
                     if hasattr(outputs, 'boundary_loss') and outputs.boundary_loss is not None:
@@ -492,13 +701,22 @@ def train_focused():
                         writer.add_scalar("mem/alloc_GB", torch.cuda.memory_allocated() / (1024**3), global_step)
                     
                     # Print progress
-                    msg = f"epoch {epoch+1} step {global_step} | total {float(loss.item() * args.gradient_accumulation_steps):.4f}"
+                    current_lr = opt.param_groups[0]['lr']
+                    msg = f"epoch {epoch+1} step {global_step} lr {current_lr:.2e} | total {avg_accumulated_loss:.4f}"
+                    if hasattr(outputs, 'lm_ce') and outputs.lm_ce is not None:
+                        msg += f" | lm_ce {float(outputs.lm_ce.item()):.4f}"
                     if hasattr(outputs, 'node_recon_loss') and outputs.node_recon_loss is not None:
                         msg += f" | node_recon {float(outputs.node_recon_loss.item()):.4f}"
                     if hasattr(outputs, 'boundary_loss') and outputs.boundary_loss is not None:
                         msg += f" | boundary {float(outputs.boundary_loss.item()):.4f}"
                     if hasattr(outputs, 'latent_mse') and outputs.latent_mse is not None:
                         msg += f" | latent_mse {float(outputs.latent_mse.item()):.4f}"
+                    if hasattr(outputs, 'boundary_acc'):
+                        msg += f" | bnd_acc {float(outputs.boundary_acc.item()):.3f}"
+                    if hasattr(outputs, 'boundary_start_recall'):
+                        msg += f" | bnd_start_rec {float(outputs.boundary_start_recall.item()):.3f}"
+                    if hasattr(outputs, 'boundary_single_recall'):
+                        msg += f" | bnd_single_rec {float(outputs.boundary_single_recall.item()):.3f}"
                     if hasattr(outputs, 'type_probe_encoder_loss'):
                         msg += f" | probe_enc_ce {float(outputs.type_probe_encoder_loss.item()):.4f}"
                     if hasattr(outputs, 'type_probe_encoder_acc'):
@@ -511,16 +729,27 @@ def train_focused():
         
         # Epoch summary
         avg_total = np.mean(epoch_losses['total']) if epoch_losses['total'] else 0
+        avg_lmce = np.mean(epoch_losses['lm_ce']) if epoch_losses['lm_ce'] else 0
         avg_node = np.mean(epoch_losses['node_recon']) if epoch_losses['node_recon'] else 0
         avg_bnd = np.mean(epoch_losses['boundary']) if epoch_losses['boundary'] else 0
         avg_mse = np.mean(epoch_losses['latent_mse']) if epoch_losses['latent_mse'] else 0
         
-        print(f"\n[Epoch {epoch+1}] Avg losses: total={avg_total:.4f}, node_recon={avg_node:.4f}, boundary={avg_bnd:.4f}, latent_mse={avg_mse:.4f}\n")
+        print(f"\n[Epoch {epoch+1}] Avg losses: total={avg_total:.4f}, lm_ce={avg_lmce:.4f}, node_recon={avg_node:.4f}, boundary={avg_bnd:.4f}, latent_mse={avg_mse:.4f}\n")
         
         writer.add_scalar("epoch/total_loss", avg_total, epoch)
+        writer.add_scalar("epoch/lm_ce_loss", avg_lmce, epoch)
         writer.add_scalar("epoch/node_recon_loss", avg_node, epoch)
         writer.add_scalar("epoch/boundary_loss", avg_bnd, epoch)
         writer.add_scalar("epoch/latent_mse_loss", avg_mse, epoch)
+        
+        # Validation (if available)
+        if val_dataloader is not None and (epoch + 1) % args.eval_every_n_epochs == 0:
+            val_metrics = run_validation(val_dataloader, epoch + 1)
+            writer.add_scalar("val/total_loss", val_metrics['total'], epoch)
+            writer.add_scalar("val/lm_ce_loss", val_metrics['lm_ce'], epoch)
+            writer.add_scalar("val/node_recon_loss", val_metrics['node_recon'], epoch)
+            writer.add_scalar("val/boundary_loss", val_metrics['boundary'], epoch)
+            writer.add_scalar("val/latent_mse_loss", val_metrics['latent_mse'], epoch)
         
         # Save checkpoint
         save_dir = os.path.join(args.output_dir, f"epoch_{epoch+1}")
