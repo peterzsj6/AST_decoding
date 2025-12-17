@@ -1,0 +1,8 @@
+{
+  "model": "deepseek-ai/DeepSeek-V3.1-Terminus",
+  "dataset": "mbpp",
+  "total_cost": 0.12548089000000012,
+  "total_tokens_in": 19865,
+  "total_tokens_out": 153556,
+  "num_tasks": 378
+}

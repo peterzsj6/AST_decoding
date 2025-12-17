@@ -1,0 +1,8 @@
+{
+  "model": "MiniMaxAI/MiniMax-M2",
+  "dataset": "humaneval",
+  "total_cost": 0.36470576,
+  "total_tokens_in": 25123,
+  "total_tokens_out": 311237,
+  "num_tasks": 164
+}

@@ -1,8 +1,8 @@
 {
   "model": "google/gemma-3-12b-it",
   "dataset": "humaneval",
-  "total_cost": 0.00010124,
-  "total_tokens_in": 425,
-  "total_tokens_out": 648,
-  "num_tasks": 3
+  "total_cost": 0.005937289999999996,
+  "total_tokens_in": 25306,
+  "total_tokens_out": 37885,
+  "num_tasks": 161
 }

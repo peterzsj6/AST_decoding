@@ -1,0 +1,8 @@
+{
+  "model": "moonshotai/Kimi-K2-Instruct-0905",
+  "dataset": "mbpp",
+  "total_cost": 0.17060999999999998,
+  "total_tokens_in": 29088,
+  "total_tokens_out": 78033,
+  "num_tasks": 378
+}

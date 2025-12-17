@@ -441,6 +441,74 @@ def main():
                 continue
     
     logger.info("\nAll benchmarks completed!")
+    
+    # Generate summary of pass@1 rates
+    generate_summary(args.output_dir)
+
+
+def generate_summary(output_dir: str):
+    """Generate a summary file with pass@1 rates for all models and datasets."""
+    import glob
+    
+    summary = {
+        "humaneval": {},
+        "mbpp": {},
+    }
+    
+    # Find all result files
+    result_files = glob.glob(os.path.join(output_dir, "*/humaneval_results.json")) + \
+                   glob.glob(os.path.join(output_dir, "*/mbpp_results.json"))
+    
+    for result_file in result_files:
+        try:
+            with open(result_file, 'r', encoding='utf-8') as f:
+                results = json.load(f)
+            
+            # Extract model name from path
+            model_dir = os.path.dirname(result_file)
+            model_name = os.path.basename(model_dir)
+            
+            # Determine dataset
+            if "humaneval" in result_file:
+                dataset = "humaneval"
+            elif "mbpp" in result_file:
+                dataset = "mbpp"
+            else:
+                continue
+            
+            # Extract pass@1 rates
+            pass_at_k = results.get("pass_at_k", {})
+            base_pass_at_1 = pass_at_k.get("base", {}).get("pass@1", None)
+            plus_pass_at_1 = pass_at_k.get("plus", {}).get("pass@1", None)
+            
+            summary[dataset][model_name] = {
+                "pass@1_base": base_pass_at_1,
+                "pass@1_plus": plus_pass_at_1,
+            }
+        except Exception as e:
+            logger.warning(f"Error reading {result_file}: {e}")
+            continue
+    
+    # Save summary
+    summary_file = os.path.join(output_dir, "summary_pass_at_1.json")
+    with open(summary_file, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+    
+    logger.info(f"\n{'='*60}")
+    logger.info("PASS@1 SUMMARY")
+    logger.info(f"{'='*60}")
+    
+    for dataset in ["humaneval", "mbpp"]:
+        if summary[dataset]:
+            logger.info(f"\n{dataset.upper()}:")
+            logger.info(f"{'Model':<50} {'Pass@1 (Base)':<15} {'Pass@1 (Plus)':<15}")
+            logger.info("-" * 80)
+            for model_name, rates in sorted(summary[dataset].items()):
+                base = f"{rates['pass@1_base']:.3f}" if rates['pass@1_base'] is not None else "N/A"
+                plus = f"{rates['pass@1_plus']:.3f}" if rates['pass@1_plus'] is not None else "N/A"
+                logger.info(f"{model_name:<50} {base:<15} {plus:<15}")
+    
+    logger.info(f"\nFull summary saved to: {summary_file}")
 
 
 if __name__ == "__main__":

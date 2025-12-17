@@ -1,0 +1,8 @@
+{
+  "model": "MiniMaxAI/MiniMax-M2",
+  "dataset": "mbpp",
+  "total_cost": 0.67822065,
+  "total_tokens_in": 26510,
+  "total_tokens_out": 583533,
+  "num_tasks": 378
+}

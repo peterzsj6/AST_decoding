@@ -1,0 +1,8 @@
+{
+  "model": "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+  "dataset": "humaneval",
+  "total_cost": 0.024405624999999993,
+  "total_tokens_in": 23155,
+  "total_tokens_out": 113345,
+  "num_tasks": 164
+}

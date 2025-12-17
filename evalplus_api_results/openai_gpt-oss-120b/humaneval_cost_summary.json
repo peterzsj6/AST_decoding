@@ -1,0 +1,8 @@
+{
+  "model": "openai/gpt-oss-120b",
+  "dataset": "humaneval",
+  "total_cost": 0.046030239999999965,
+  "total_tokens_in": 30392,
+  "total_tokens_out": 185461,
+  "num_tasks": 164
+}

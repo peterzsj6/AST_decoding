@@ -21,12 +21,19 @@ except Exception:  # pragma: no cover
 
 
 def select_device(preferred_device: str = "auto") -> str:
+    """
+    Select device. GPU selection is handled by CUDA_VISIBLE_DEVICES environment variable.
+    This function only selects between "cuda" (GPU 0 from PyTorch's perspective) and "cpu".
+    """
     if preferred_device == "auto":
         return "cuda" if torch.cuda.is_available() else "cpu"
-    if preferred_device in {"cuda", "cpu"}:
-        if preferred_device == "cuda" and not torch.cuda.is_available():
+    if preferred_device == "cuda":
+        if not torch.cuda.is_available():
             return "cpu"
-        return preferred_device
+        return "cuda"
+    if preferred_device == "cpu":
+        return "cpu"
+    # Default fallback
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -56,23 +63,62 @@ def load_adapter_and_tokenizer(checkpoint_path: Optional[str], model_path: str, 
         adapter = None
         load_error: Optional[Exception] = None
         try:
-            base = BLTAdapterModel.from_pretrained(checkpoint_path, torch_dtype=dtype)  # type: ignore[arg-type]
+            print(f"[load] Attempting to load checkpoint from {checkpoint_path} using from_pretrained...")
+            # Capture loading info so we can detect partially-initialized modules (which can silently tank quality).
+            base, loading_info = BLTAdapterModel.from_pretrained(  # type: ignore[misc]
+                checkpoint_path,
+                torch_dtype=dtype,  # type: ignore[arg-type]
+                output_loading_info=True,
+            )
+            missing_keys = list((loading_info or {}).get("missing_keys", []))
+            unexpected_keys = list((loading_info or {}).get("unexpected_keys", []))
+            if missing_keys:
+                print(f"[load] WARNING: from_pretrained missing {len(missing_keys)} key(s). Example: {missing_keys[:8]}")
+            if unexpected_keys:
+                print(f"[load] WARNING: from_pretrained unexpected {len(unexpected_keys)} key(s). Example: {unexpected_keys[:8]}")
+
+            # Backward-compat: older checkpoints may only have `cross_attn_global.*` (nn.MultiheadAttention)
+            # while newer code defaults to using the SDPA module `cross_attn_global_sdpa.*` at runtime.
+            # If SDPA weights are missing, we MUST disable the SDPA path, otherwise inference uses random weights.
+            if any("cross_attn_global_sdpa" in k for k in missing_keys):
+                try:
+                    num_flipped = 0
+                    if hasattr(base, "local_decoder") and hasattr(base.local_decoder, "layers"):
+                        for layer in base.local_decoder.layers:
+                            if hasattr(layer, "use_sdpa_global_attn"):
+                                layer.use_sdpa_global_attn = False
+                                num_flipped += 1
+                    print(
+                        f"[load] Detected checkpoint without SDPA global-attn weights; "
+                        f"disabled SDPA path for {num_flipped} local decoder layer(s) to use loaded MultiheadAttention weights."
+                    )
+                except Exception as _e:
+                    print(f"[load] WARNING: Failed to disable SDPA global-attn path automatically: {_e}")
             adapter = PeftModel.from_pretrained(base, peft_adapter) if (peft_adapter and os.path.isdir(peft_adapter)) else base  # type: ignore[assignment]
+            print(f"[load] Successfully loaded checkpoint using from_pretrained")
         except Exception as e:
             load_error = e
+            print(f"[load] from_pretrained failed: {e}")
+            print(f"[load] Falling back to state_dict loading...")
             # Robust fallback: instantiate adapter from base path then load state_dict with strict=False
             base = create_blt_adapter_model(model_path)
             state_path_bin = os.path.join(checkpoint_path, "pytorch_model.bin")
             state_path_safetensors = os.path.join(checkpoint_path, "model.safetensors")
             state_dict = None
             if os.path.isfile(state_path_bin):
+                print(f"[load] Loading state_dict from {state_path_bin}")
                 state_dict = torch.load(state_path_bin, map_location="cpu")
             elif os.path.isfile(state_path_safetensors):
                 try:
                     from safetensors.torch import load_file as load_safetensors  # type: ignore
+                    print(f"[load] Loading state_dict from {state_path_safetensors}")
                     state_dict = load_safetensors(state_path_safetensors)
-                except Exception:
+                except Exception as e2:
+                    print(f"[load] Failed to load safetensors: {e2}")
                     state_dict = None
+            else:
+                print(f"[load] WARNING: No state_dict file found in {checkpoint_path}")
+            
             if state_dict is not None:
                 try:
                     model_sd = base.state_dict()
@@ -83,11 +129,49 @@ def load_adapter_and_tokenizer(checkpoint_path: Optional[str], model_path: str, 
                             filtered_state[k] = v
                         else:
                             skipped.append(k)
+                    
+                    if len(skipped) > 0:
+                        print(f"[load] Skipped {len(skipped)} keys (shape mismatch or not in model): {skipped[:10]}...")
+                    
                     if len(filtered_state) > 0:
-                        base.load_state_dict(filtered_state, strict=False)
-                except Exception:
-                    pass
+                        missing_keys, unexpected_keys = base.load_state_dict(filtered_state, strict=False)
+                        print(f"[load] Loaded {len(filtered_state)} parameters from checkpoint")
+                        if missing_keys:
+                            print(f"[load] WARNING: {len(missing_keys)} missing keys: {list(missing_keys)[:10]}...")
+                        if unexpected_keys:
+                            print(f"[load] WARNING: {len(unexpected_keys)} unexpected keys: {list(unexpected_keys)[:10]}...")
+                    else:
+                        print(f"[load] ERROR: No parameters could be loaded from checkpoint!")
+                        raise RuntimeError(f"Failed to load any parameters from {checkpoint_path}")
+                except Exception as e2:
+                    print(f"[load] ERROR: Failed to load state_dict: {e2}")
+                    raise
+            else:
+                print(f"[load] ERROR: No state_dict available to load!")
+                raise RuntimeError(f"Could not load checkpoint from {checkpoint_path}: no state_dict file found")
+            
             adapter = PeftModel.from_pretrained(base, peft_adapter) if (peft_adapter and os.path.isdir(peft_adapter)) else base  # type: ignore[assignment]
+
+            # Same backward-compat runtime safety for the fallback path:
+            # if the checkpoint doesn't contain SDPA weights, don't route inference through them.
+            try:
+                if state_dict is not None:
+                    sd_keys = list(state_dict.keys())
+                    has_sdpa = any("cross_attn_global_sdpa" in k for k in sd_keys)
+                    has_mha = any("cross_attn_global." in k for k in sd_keys)
+                    if (not has_sdpa) and has_mha:
+                        num_flipped = 0
+                        if hasattr(base, "local_decoder") and hasattr(base.local_decoder, "layers"):
+                            for layer in base.local_decoder.layers:
+                                if hasattr(layer, "use_sdpa_global_attn"):
+                                    layer.use_sdpa_global_attn = False
+                                    num_flipped += 1
+                        print(
+                            f"[load] Checkpoint provides MultiheadAttention global-attn weights but not SDPA; "
+                            f"disabled SDPA path for {num_flipped} local decoder layer(s)."
+                        )
+            except Exception as _e:
+                print(f"[load] WARNING: Failed to apply SDPA/MHA compatibility toggle in fallback load: {_e}")
         # Move to device with graceful OOM fallback
         try:
             adapter = adapter.to(device=device, dtype=dtype)  # type: ignore[union-attr]
@@ -124,6 +208,44 @@ def load_adapter_and_tokenizer(checkpoint_path: Optional[str], model_path: str, 
     except Exception:
         pass
     adapter.eval()
+    
+    # Verify checkpoint was loaded by checking trainable parameters
+    # This helps catch cases where the checkpoint wasn't actually loaded
+    if checkpoint_path and os.path.isdir(checkpoint_path):
+        try:
+            # Get checksums of key trainable components to verify they're different
+            checksums = {}
+            if hasattr(adapter, 'boundary_head') and adapter.boundary_head is not None:
+                boundary_params = list(adapter.boundary_head.parameters())
+                if boundary_params:
+                    # Compute a simple checksum: sum of all parameter values
+                    boundary_sum = sum(p.sum().item() for p in boundary_params)
+                    checksums['boundary_head'] = boundary_sum
+                    print(f"[load] Verification: boundary_head param sum = {boundary_sum:.6f}")
+            
+            if hasattr(adapter, 'latent_from_global') and adapter.latent_from_global is not None:
+                latent_params = list(adapter.latent_from_global.parameters())
+                if latent_params:
+                    latent_sum = sum(p.sum().item() for p in latent_params)
+                    checksums['latent_from_global'] = latent_sum
+                    print(f"[load] Verification: latent_from_global param sum = {latent_sum:.6f}")
+            
+            if hasattr(adapter, 'local_transformer') and adapter.local_transformer is not None:
+                local_params = list(adapter.local_transformer.parameters())
+                if local_params:
+                    local_sum = sum(p.sum().item() for p in local_params[:5])  # First 5 params as sample
+                    checksums['local_transformer_sample'] = local_sum
+                    print(f"[load] Verification: local_transformer sample param sum = {local_sum:.6f}")
+            
+            # Print checkpoint path for debugging
+            print(f"[load] Checkpoint loaded from: {checkpoint_path}")
+            print(f"[load] Parameter checksums: {checksums}")
+            
+        except Exception as e:
+            print(f"[load] Verification check failed: {e}")
+            import traceback
+            traceback.print_exc()
+    
     return adapter, tokenizer
 
 
@@ -267,6 +389,7 @@ def incremental_generate(
     device = next(model.parameters()).device
     input_ids = enc["input_ids"].to(device)
     attention_mask = enc.get("attention_mask", torch.ones_like(input_ids)).to(device)
+    prompt_len = int(input_ids.size(1))  # never rewrite prompt tokens
 
     # Helper to append tokens
     def append_tokens(toks: List[int]):
@@ -342,7 +465,12 @@ def incremental_generate(
         end = start + span_len
         span_ids = input_ids[:, start:end]
 
-        if use_local_decoder:
+        # Safety: do not rewrite the prompt portion; only rewrite generated completion.
+        # Also avoid rewriting very small spans which tend to be unstable.
+        min_rewrite_span_len = 8
+        allow_rewrite = bool(use_local_decoder) and (start >= prompt_len) and (span_len >= min_rewrite_span_len)
+
+        if allow_rewrite:
             # === LOCAL DECODER path ===
             # 1) Local encoder to get span memory (cross-attn input)
             try:
@@ -377,14 +505,18 @@ def incremental_generate(
                     global_hidden=global_hidden_last,
                     global_memory=global_memory.squeeze(0),
                     global_key_padding_mask=global_kpm,
-                    max_len=span_len,
+                    # Important: when prefix_ids is provided, generate_node_tokens returns ONLY newly
+                    # generated tokens (excluding the prefix). To produce a same-length replacement,
+                    # we request span_len new tokens while allowing total length prefix+new via max_len.
+                    max_len=span_len * 2,
                     prefix_ids=prefix_ids,
-                    num_new_tokens=0,  # rewrite conditioned on prefix; no extension
+                    num_new_tokens=span_len,  # generate a full replacement span of the same length
                     bos_id=None,
                     eos_id=eos_id,
                 )
 
-            if decoded_ids.numel() > 0:
+            # We expect EXACTLY span_len replacement tokens. If not, fall back to the original global span.
+            if decoded_ids.numel() == span_len:
                 new_node_tensor = decoded_ids.unsqueeze(0).to(device=device, dtype=input_ids.dtype)
             else:
                 new_node_tensor = span_ids.to(device=device, dtype=input_ids.dtype)
@@ -410,11 +542,11 @@ def incremental_generate(
 
     def recompute_hidden_states():
         with torch.no_grad():
-                outputs = model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
                 output_hidden_states=True,
-                )
+            )
         return outputs.logits[:, -1, :], outputs.hidden_states[-1]  # type: ignore[attr-defined]
 
     logits, global_hidden_seq = recompute_hidden_states()
@@ -422,6 +554,7 @@ def incremental_generate(
     logits_valid = True
     fired_boundaries = 0
     total_tokens = 0
+    boundary_predictions = []  # Track boundary predictions for debugging
 
     def ensure_fresh_states():
         nonlocal logits, global_hidden_seq, last_hidden, logits_valid
@@ -442,21 +575,22 @@ def incremental_generate(
                 boundary_logits = model.boundary_head(last_hidden)
                 probs = torch.softmax(boundary_logits, dim=-1)
                 boundary_confidence = float(probs[0, 1].item())
+                boundary_predictions.append(boundary_confidence)
 
         if banned_ids:
             logits[:, banned_ids] = float("-inf")
 
-            logits = _apply_repetition_penalty_and_ngram_blocking(
-                logits=logits,
-                generated_ids=input_ids,
-                repetition_penalty=repetition_penalty,
-                no_repeat_ngram_size=no_repeat_ngram_size,
-            )
-            if temperature <= 0.0 and top_p >= 1.0:
-                next_id = int(torch.argmax(logits, dim=-1).item())
-            else:
-                next_id = sample_from_logits(logits)
-            append_tokens([next_id])
+        logits = _apply_repetition_penalty_and_ngram_blocking(
+            logits=logits,
+            generated_ids=input_ids,
+            repetition_penalty=repetition_penalty,
+            no_repeat_ngram_size=no_repeat_ngram_size,
+        )
+        if temperature <= 0.0 and top_p >= 1.0:
+            next_id = int(torch.argmax(logits, dim=-1).item())
+        else:
+            next_id = sample_from_logits(logits)
+        append_tokens([next_id])
         node_buffer.append(next_id)
         current_node_start_idx = input_ids.size(1) - len(node_buffer)
         new_tokens += 1

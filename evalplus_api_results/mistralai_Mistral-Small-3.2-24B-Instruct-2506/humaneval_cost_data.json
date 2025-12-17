@@ -1,0 +1,822 @@
+{
+  "HumanEval/100": {
+    "cost": 0.00011515000000000001,
+    "tokens_in": 130,
+    "tokens_out": 527
+  },
+  "HumanEval/0": {
+    "cost": 0.00012382500000000001,
+    "tokens_in": 123,
+    "tokens_out": 573
+  },
+  "HumanEval/1": {
+    "cost": 0.000125875,
+    "tokens_in": 121,
+    "tokens_out": 584
+  },
+  "HumanEval/101": {
+    "cost": 0.0001123,
+    "tokens_in": 116,
+    "tokens_out": 518
+  },
+  "HumanEval/102": {
+    "cost": 0.00011715000000000002,
+    "tokens_in": 98,
+    "tokens_out": 549
+  },
+  "HumanEval/103": {
+    "cost": 0.00012017500000000001,
+    "tokens_in": 149,
+    "tokens_out": 545
+  },
+  "HumanEval/104": {
+    "cost": 0.000129725,
+    "tokens_in": 119,
+    "tokens_out": 604
+  },
+  "HumanEval/105": {
+    "cost": 0.00015455000000000002,
+    "tokens_in": 282,
+    "tokens_out": 667
+  },
+  "HumanEval/107": {
+    "cost": 0.0001212,
+    "tokens_in": 216,
+    "tokens_out": 525
+  },
+  "HumanEval/106": {
+    "cost": 0.0001439,
+    "tokens_in": 124,
+    "tokens_out": 673
+  },
+  "HumanEval/109": {
+    "cost": 0.00014737500000000002,
+    "tokens_in": 309,
+    "tokens_out": 621
+  },
+  "HumanEval/108": {
+    "cost": 0.0001365,
+    "tokens_in": 132,
+    "tokens_out": 633
+  },
+  "HumanEval/11": {
+    "cost": 0.00011975000000000001,
+    "tokens_in": 82,
+    "tokens_out": 568
+  },
+  "HumanEval/112": {
+    "cost": 0.00011345,
+    "tokens_in": 166,
+    "tokens_out": 505
+  },
+  "HumanEval/111": {
+    "cost": 0.00011425,
+    "tokens_in": 150,
+    "tokens_out": 515
+  },
+  "HumanEval/110": {
+    "cost": 0.0001611,
+    "tokens_in": 196,
+    "tokens_out": 732
+  },
+  "HumanEval/113": {
+    "cost": 0.0001306,
+    "tokens_in": 184,
+    "tokens_out": 584
+  },
+  "HumanEval/114": {
+    "cost": 0.00012432500000000003,
+    "tokens_in": 87,
+    "tokens_out": 589
+  },
+  "HumanEval/115": {
+    "cost": 0.00015230000000000002,
+    "tokens_in": 332,
+    "tokens_out": 637
+  },
+  "HumanEval/116": {
+    "cost": 0.00014175,
+    "tokens_in": 170,
+    "tokens_out": 645
+  },
+  "HumanEval/117": {
+    "cost": 0.00012967500000000002,
+    "tokens_in": 185,
+    "tokens_out": 579
+  },
+  "HumanEval/12": {
+    "cost": 6.630000000000001e-05,
+    "tokens_in": 100,
+    "tokens_out": 294
+  },
+  "HumanEval/118": {
+    "cost": 0.00012575,
+    "tokens_in": 154,
+    "tokens_out": 571
+  },
+  "HumanEval/119": {
+    "cost": 0.00012962500000000002,
+    "tokens_in": 171,
+    "tokens_out": 584
+  },
+  "HumanEval/120": {
+    "cost": 0.00011645000000000001,
+    "tokens_in": 222,
+    "tokens_out": 499
+  },
+  "HumanEval/121": {
+    "cost": 0.00011775000000000002,
+    "tokens_in": 106,
+    "tokens_out": 549
+  },
+  "HumanEval/122": {
+    "cost": 0.00013780000000000002,
+    "tokens_in": 136,
+    "tokens_out": 638
+  },
+  "HumanEval/123": {
+    "cost": 0.00014075,
+    "tokens_in": 234,
+    "tokens_out": 616
+  },
+  "HumanEval/125": {
+    "cost": 0.00011902499999999999,
+    "tokens_in": 147,
+    "tokens_out": 540
+  },
+  "HumanEval/126": {
+    "cost": 0.000115875,
+    "tokens_in": 265,
+    "tokens_out": 480
+  },
+  "HumanEval/124": {
+    "cost": 0.000180675,
+    "tokens_in": 289,
+    "tokens_out": 795
+  },
+  "HumanEval/127": {
+    "cost": 0.000153825,
+    "tokens_in": 259,
+    "tokens_out": 672
+  },
+  "HumanEval/128": {
+    "cost": 0.000128325,
+    "tokens_in": 119,
+    "tokens_out": 597
+  },
+  "HumanEval/13": {
+    "cost": 0.000112275,
+    "tokens_in": 73,
+    "tokens_out": 534
+  },
+  "HumanEval/129": {
+    "cost": 0.000199425,
+    "tokens_in": 395,
+    "tokens_out": 849
+  },
+  "HumanEval/131": {
+    "cost": 9.38e-05,
+    "tokens_in": 72,
+    "tokens_out": 442
+  },
+  "HumanEval/132": {
+    "cost": 0.000131475,
+    "tokens_in": 145,
+    "tokens_out": 603
+  },
+  "HumanEval/133": {
+    "cost": 0.00011275,
+    "tokens_in": 162,
+    "tokens_out": 503
+  },
+  "HumanEval/134": {
+    "cost": 0.00013442500000000003,
+    "tokens_in": 147,
+    "tokens_out": 617
+  },
+  "HumanEval/135": {
+    "cost": 0.000105375,
+    "tokens_in": 101,
+    "tokens_out": 489
+  },
+  "HumanEval/130": {
+    "cost": 0.00030740000000000005,
+    "tokens_in": 240,
+    "tokens_out": 1447
+  },
+  "HumanEval/136": {
+    "cost": 0.000111575,
+    "tokens_in": 141,
+    "tokens_out": 505
+  },
+  "HumanEval/137": {
+    "cost": 0.00011899999999999999,
+    "tokens_in": 144,
+    "tokens_out": 541
+  },
+  "HumanEval/138": {
+    "cost": 0.000156,
+    "tokens_in": 80,
+    "tokens_out": 750
+  },
+  "HumanEval/14": {
+    "cost": 0.00010960000000000001,
+    "tokens_in": 56,
+    "tokens_out": 527
+  },
+  "HumanEval/139": {
+    "cost": 0.00015634999999999998,
+    "tokens_in": 98,
+    "tokens_out": 745
+  },
+  "HumanEval/140": {
+    "cost": 0.000130425,
+    "tokens_in": 115,
+    "tokens_out": 609
+  },
+  "HumanEval/142": {
+    "cost": 0.00012192500000000002,
+    "tokens_in": 175,
+    "tokens_out": 544
+  },
+  "HumanEval/141": {
+    "cost": 0.00014879999999999998,
+    "tokens_in": 216,
+    "tokens_out": 663
+  },
+  "HumanEval/143": {
+    "cost": 0.000113675,
+    "tokens_in": 153,
+    "tokens_out": 511
+  },
+  "HumanEval/145": {
+    "cost": 0.000138325,
+    "tokens_in": 119,
+    "tokens_out": 647
+  },
+  "HumanEval/146": {
+    "cost": 0.00013815,
+    "tokens_in": 130,
+    "tokens_out": 642
+  },
+  "HumanEval/144": {
+    "cost": 0.00014644999999999998,
+    "tokens_in": 158,
+    "tokens_out": 673
+  },
+  "HumanEval/15": {
+    "cost": 9.93e-05,
+    "tokens_in": 68,
+    "tokens_out": 471
+  },
+  "HumanEval/147": {
+    "cost": 0.000183825,
+    "tokens_in": 171,
+    "tokens_out": 855
+  },
+  "HumanEval/149": {
+    "cost": 0.00014842500000000002,
+    "tokens_in": 187,
+    "tokens_out": 672
+  },
+  "HumanEval/148": {
+    "cost": 0.000161,
+    "tokens_in": 224,
+    "tokens_out": 721
+  },
+  "HumanEval/150": {
+    "cost": 0.00011922500000000001,
+    "tokens_in": 91,
+    "tokens_out": 562
+  },
+  "HumanEval/152": {
+    "cost": 0.000107625,
+    "tokens_in": 235,
+    "tokens_out": 450
+  },
+  "HumanEval/151": {
+    "cost": 0.00010850000000000001,
+    "tokens_in": 148,
+    "tokens_out": 487
+  },
+  "HumanEval/153": {
+    "cost": 0.000143375,
+    "tokens_in": 277,
+    "tokens_out": 613
+  },
+  "HumanEval/154": {
+    "cost": 0.00010080000000000001,
+    "tokens_in": 136,
+    "tokens_out": 453
+  },
+  "HumanEval/157": {
+    "cost": 9.6725e-05,
+    "tokens_in": 111,
+    "tokens_out": 442
+  },
+  "HumanEval/155": {
+    "cost": 0.00013552500000000003,
+    "tokens_in": 71,
+    "tokens_out": 651
+  },
+  "HumanEval/158": {
+    "cost": 0.000125475,
+    "tokens_in": 121,
+    "tokens_out": 582
+  },
+  "HumanEval/156": {
+    "cost": 0.000153925,
+    "tokens_in": 111,
+    "tokens_out": 728
+  },
+  "HumanEval/159": {
+    "cost": 0.00013125000000000002,
+    "tokens_in": 302,
+    "tokens_out": 543
+  },
+  "HumanEval/16": {
+    "cost": 9.58e-05,
+    "tokens_in": 72,
+    "tokens_out": 452
+  },
+  "HumanEval/161": {
+    "cost": 0.00010365,
+    "tokens_in": 110,
+    "tokens_out": 477
+  },
+  "HumanEval/160": {
+    "cost": 0.000139275,
+    "tokens_in": 217,
+    "tokens_out": 615
+  },
+  "HumanEval/162": {
+    "cost": 0.00010965,
+    "tokens_in": 86,
+    "tokens_out": 516
+  },
+  "HumanEval/17": {
+    "cost": 0.00012962500000000002,
+    "tokens_in": 171,
+    "tokens_out": 584
+  },
+  "HumanEval/18": {
+    "cost": 0.000119725,
+    "tokens_in": 87,
+    "tokens_out": 566
+  },
+  "HumanEval/163": {
+    "cost": 0.00020150000000000002,
+    "tokens_in": 108,
+    "tokens_out": 967
+  },
+  "HumanEval/19": {
+    "cost": 0.0001551,
+    "tokens_in": 108,
+    "tokens_out": 735
+  },
+  "HumanEval/2": {
+    "cost": 0.00010997500000000002,
+    "tokens_in": 85,
+    "tokens_out": 518
+  },
+  "HumanEval/22": {
+    "cost": 8.597499999999999e-05,
+    "tokens_in": 93,
+    "tokens_out": 395
+  },
+  "HumanEval/20": {
+    "cost": 0.00015365000000000002,
+    "tokens_in": 166,
+    "tokens_out": 706
+  },
+  "HumanEval/21": {
+    "cost": 0.00014857500000000002,
+    "tokens_in": 125,
+    "tokens_out": 696
+  },
+  "HumanEval/23": {
+    "cost": 6.207499999999999e-05,
+    "tokens_in": 41,
+    "tokens_out": 295
+  },
+  "HumanEval/26": {
+    "cost": 0.00010485,
+    "tokens_in": 86,
+    "tokens_out": 492
+  },
+  "HumanEval/24": {
+    "cost": 0.00013417500000000002,
+    "tokens_in": 53,
+    "tokens_out": 651
+  },
+  "HumanEval/27": {
+    "cost": 9.965000000000001e-05,
+    "tokens_in": 46,
+    "tokens_out": 481
+  },
+  "HumanEval/25": {
+    "cost": 0.000148975,
+    "tokens_in": 125,
+    "tokens_out": 698
+  },
+  "HumanEval/28": {
+    "cost": 8.615000000000001e-05,
+    "tokens_in": 58,
+    "tokens_out": 409
+  },
+  "HumanEval/29": {
+    "cost": 8.2525e-05,
+    "tokens_in": 87,
+    "tokens_out": 380
+  },
+  "HumanEval/3": {
+    "cost": 9.669999999999999e-05,
+    "tokens_in": 116,
+    "tokens_out": 440
+  },
+  "HumanEval/30": {
+    "cost": 8.740000000000001e-05,
+    "tokens_in": 120,
+    "tokens_out": 392
+  },
+  "HumanEval/34": {
+    "cost": 3.9025e-05,
+    "tokens_in": 75,
+    "tokens_out": 167
+  },
+  "HumanEval/31": {
+    "cost": 0.0001194,
+    "tokens_in": 112,
+    "tokens_out": 555
+  },
+  "HumanEval/35": {
+    "cost": 8.9375e-05,
+    "tokens_in": 85,
+    "tokens_out": 415
+  },
+  "HumanEval/33": {
+    "cost": 0.000125725,
+    "tokens_in": 151,
+    "tokens_out": 572
+  },
+  "HumanEval/32": {
+    "cost": 0.0002356,
+    "tokens_in": 264,
+    "tokens_out": 1079
+  },
+  "HumanEval/38": {
+    "cost": 9.8725e-05,
+    "tokens_in": 159,
+    "tokens_out": 434
+  },
+  "HumanEval/36": {
+    "cost": 0.00017155000000000002,
+    "tokens_in": 90,
+    "tokens_out": 824
+  },
+  "HumanEval/37": {
+    "cost": 0.00014650000000000004,
+    "tokens_in": 124,
+    "tokens_out": 686
+  },
+  "HumanEval/4": {
+    "cost": 0.000135525,
+    "tokens_in": 119,
+    "tokens_out": 633
+  },
+  "HumanEval/39": {
+    "cost": 0.00013855,
+    "tokens_in": 98,
+    "tokens_out": 656
+  },
+  "HumanEval/40": {
+    "cost": 0.0001393,
+    "tokens_in": 164,
+    "tokens_out": 635
+  },
+  "HumanEval/41": {
+    "cost": 0.00011235000000000001,
+    "tokens_in": 154,
+    "tokens_out": 504
+  },
+  "HumanEval/42": {
+    "cost": 8.2225e-05,
+    "tokens_in": 115,
+    "tokens_out": 368
+  },
+  "HumanEval/45": {
+    "cost": 6.35e-05,
+    "tokens_in": 44,
+    "tokens_out": 301
+  },
+  "HumanEval/43": {
+    "cost": 0.00012602500000000001,
+    "tokens_in": 155,
+    "tokens_out": 572
+  },
+  "HumanEval/44": {
+    "cost": 0.000127525,
+    "tokens_in": 95,
+    "tokens_out": 602
+  },
+  "HumanEval/47": {
+    "cost": 0.0001026,
+    "tokens_in": 80,
+    "tokens_out": 483
+  },
+  "HumanEval/48": {
+    "cost": 0.00010642500000000001,
+    "tokens_in": 75,
+    "tokens_out": 504
+  },
+  "HumanEval/46": {
+    "cost": 0.00014855000000000003,
+    "tokens_in": 170,
+    "tokens_out": 679
+  },
+  "HumanEval/49": {
+    "cost": 0.00016115,
+    "tokens_in": 114,
+    "tokens_out": 763
+  },
+  "HumanEval/50": {
+    "cost": 9.475e-05,
+    "tokens_in": 90,
+    "tokens_out": 440
+  },
+  "HumanEval/51": {
+    "cost": 7.172500000000001e-05,
+    "tokens_in": 127,
+    "tokens_out": 311
+  },
+  "HumanEval/5": {
+    "cost": 0.000111475,
+    "tokens_in": 97,
+    "tokens_out": 521
+  },
+  "HumanEval/52": {
+    "cost": 8.495000000000002e-05,
+    "tokens_in": 82,
+    "tokens_out": 394
+  },
+  "HumanEval/53": {
+    "cost": 7.83e-05,
+    "tokens_in": 52,
+    "tokens_out": 372
+  },
+  "HumanEval/54": {
+    "cost": 0.0001151,
+    "tokens_in": 156,
+    "tokens_out": 517
+  },
+  "HumanEval/10": {
+    "cost": 0.0032879750000000003,
+    "tokens_in": 149,
+    "tokens_out": 16384
+  },
+  "HumanEval/55": {
+    "cost": 9.905000000000001e-05,
+    "tokens_in": 54,
+    "tokens_out": 475
+  },
+  "HumanEval/56": {
+    "cost": 0.00011270000000000002,
+    "tokens_in": 92,
+    "tokens_out": 529
+  },
+  "HumanEval/57": {
+    "cost": 0.00012660000000000001,
+    "tokens_in": 88,
+    "tokens_out": 600
+  },
+  "HumanEval/58": {
+    "cost": 0.000126875,
+    "tokens_in": 121,
+    "tokens_out": 589
+  },
+  "HumanEval/60": {
+    "cost": 9.765e-05,
+    "tokens_in": 102,
+    "tokens_out": 450
+  },
+  "HumanEval/6": {
+    "cost": 0.00012595,
+    "tokens_in": 114,
+    "tokens_out": 587
+  },
+  "HumanEval/59": {
+    "cost": 0.00014805,
+    "tokens_in": 70,
+    "tokens_out": 714
+  },
+  "HumanEval/61": {
+    "cost": 0.000106375,
+    "tokens_in": 93,
+    "tokens_out": 497
+  },
+  "HumanEval/63": {
+    "cost": 0.00012230000000000002,
+    "tokens_in": 148,
+    "tokens_out": 556
+  },
+  "HumanEval/64": {
+    "cost": 0.000140375,
+    "tokens_in": 125,
+    "tokens_out": 655
+  },
+  "HumanEval/62": {
+    "cost": 0.000149975,
+    "tokens_in": 109,
+    "tokens_out": 709
+  },
+  "HumanEval/67": {
+    "cost": 0.00011675,
+    "tokens_in": 242,
+    "tokens_out": 493
+  },
+  "HumanEval/66": {
+    "cost": 0.00010352500000000001,
+    "tokens_in": 119,
+    "tokens_out": 473
+  },
+  "HumanEval/69": {
+    "cost": 0.00010425000000000001,
+    "tokens_in": 166,
+    "tokens_out": 459
+  },
+  "HumanEval/65": {
+    "cost": 0.00015877500000000002,
+    "tokens_in": 85,
+    "tokens_out": 762
+  },
+  "HumanEval/7": {
+    "cost": 8.005e-05,
+    "tokens_in": 94,
+    "tokens_out": 365
+  },
+  "HumanEval/68": {
+    "cost": 0.00013837500000000002,
+    "tokens_in": 317,
+    "tokens_out": 573
+  },
+  "HumanEval/74": {
+    "cost": 9.3e-05,
+    "tokens_in": 200,
+    "tokens_out": 390
+  },
+  "HumanEval/72": {
+    "cost": 0.000142475,
+    "tokens_in": 233,
+    "tokens_out": 625
+  },
+  "HumanEval/71": {
+    "cost": 0.000124225,
+    "tokens_in": 123,
+    "tokens_out": 575
+  },
+  "HumanEval/70": {
+    "cost": 0.000233225,
+    "tokens_in": 123,
+    "tokens_out": 1120
+  },
+  "HumanEval/73": {
+    "cost": 0.00021582500000000003,
+    "tokens_in": 155,
+    "tokens_out": 1021
+  },
+  "HumanEval/77": {
+    "cost": 0.00012837500000000002,
+    "tokens_in": 125,
+    "tokens_out": 595
+  },
+  "HumanEval/78": {
+    "cost": 0.0001227,
+    "tokens_in": 324,
+    "tokens_out": 492
+  },
+  "HumanEval/79": {
+    "cost": 0.00010195,
+    "tokens_in": 146,
+    "tokens_out": 455
+  },
+  "HumanEval/76": {
+    "cost": 0.00021190000000000003,
+    "tokens_in": 140,
+    "tokens_out": 1007
+  },
+  "HumanEval/75": {
+    "cost": 0.0001998,
+    "tokens_in": 88,
+    "tokens_out": 966
+  },
+  "HumanEval/8": {
+    "cost": 0.00010025,
+    "tokens_in": 110,
+    "tokens_out": 460
+  },
+  "HumanEval/80": {
+    "cost": 0.00010487500000000001,
+    "tokens_in": 121,
+    "tokens_out": 479
+  },
+  "HumanEval/82": {
+    "cost": 8.6275e-05,
+    "tokens_in": 81,
+    "tokens_out": 401
+  },
+  "HumanEval/84": {
+    "cost": 0.0001017,
+    "tokens_in": 148,
+    "tokens_out": 453
+  },
+  "HumanEval/81": {
+    "cost": 0.00016355000000000002,
+    "tokens_in": 282,
+    "tokens_out": 712
+  },
+  "HumanEval/83": {
+    "cost": 0.00014722500000000001,
+    "tokens_in": 43,
+    "tokens_out": 720
+  },
+  "HumanEval/85": {
+    "cost": 0.000115,
+    "tokens_in": 56,
+    "tokens_out": 554
+  },
+  "HumanEval/88": {
+    "cost": 0.000117875,
+    "tokens_in": 201,
+    "tokens_out": 514
+  },
+  "HumanEval/87": {
+    "cost": 0.0001173,
+    "tokens_in": 260,
+    "tokens_out": 489
+  },
+  "HumanEval/89": {
+    "cost": 0.00015680000000000002,
+    "tokens_in": 112,
+    "tokens_out": 742
+  },
+  "HumanEval/9": {
+    "cost": 0.00012255,
+    "tokens_in": 98,
+    "tokens_out": 576
+  },
+  "HumanEval/90": {
+    "cost": 9.47e-05,
+    "tokens_in": 124,
+    "tokens_out": 427
+  },
+  "HumanEval/92": {
+    "cost": 0.00011779999999999999,
+    "tokens_in": 144,
+    "tokens_out": 535
+  },
+  "HumanEval/91": {
+    "cost": 0.000106725,
+    "tokens_in": 111,
+    "tokens_out": 492
+  },
+  "HumanEval/93": {
+    "cost": 0.00013415,
+    "tokens_in": 114,
+    "tokens_out": 628
+  },
+  "HumanEval/94": {
+    "cost": 0.00014445000000000001,
+    "tokens_in": 326,
+    "tokens_out": 600
+  },
+  "HumanEval/95": {
+    "cost": 0.000129925,
+    "tokens_in": 183,
+    "tokens_out": 581
+  },
+  "HumanEval/96": {
+    "cost": 0.00014255000000000002,
+    "tokens_in": 154,
+    "tokens_out": 655
+  },
+  "HumanEval/97": {
+    "cost": 0.0001312,
+    "tokens_in": 112,
+    "tokens_out": 614
+  },
+  "HumanEval/99": {
+    "cost": 0.00011032500000000001,
+    "tokens_in": 167,
+    "tokens_out": 489
+  },
+  "HumanEval/98": {
+    "cost": 0.00012077500000000001,
+    "tokens_in": 77,
+    "tokens_out": 575
+  },
+  "HumanEval/86": {
+    "cost": 0.0005703749999999999,
+    "tokens_in": 133,
+    "tokens_out": 2802
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "model": "deepseek-ai/DeepSeek-V3.2-Exp",
+  "dataset": "humaneval",
+  "total_cost": 0.03864715000000001,
+  "total_tokens_in": 22785,
+  "total_tokens_out": 81238,
+  "num_tasks": 164
+}

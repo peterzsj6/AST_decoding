@@ -1,0 +1,1892 @@
+{
+  "Mbpp/104": {
+    "cost": 6.119e-05,
+    "tokens_in": 77,
+    "tokens_out": 101
+  },
+  "Mbpp/102": {
+    "cost": 5.852000000000001e-05,
+    "tokens_in": 36,
+    "tokens_out": 122
+  },
+  "Mbpp/101": {
+    "cost": 6.483e-05,
+    "tokens_in": 49,
+    "tokens_out": 129
+  },
+  "Mbpp/108": {
+    "cost": 6.111000000000002e-05,
+    "tokens_in": 133,
+    "tokens_out": 63
+  },
+  "Mbpp/105": {
+    "cost": 6.492e-05,
+    "tokens_in": 36,
+    "tokens_out": 138
+  },
+  "Mbpp/106": {
+    "cost": 7.512e-05,
+    "tokens_in": 56,
+    "tokens_out": 150
+  },
+  "Mbpp/11": {
+    "cost": 0.00011,
+    "tokens_in": 40,
+    "tokens_out": 248
+  },
+  "Mbpp/113": {
+    "cost": 8.424e-05,
+    "tokens_in": 32,
+    "tokens_out": 189
+  },
+  "Mbpp/111": {
+    "cost": 0.0001827,
+    "tokens_in": 90,
+    "tokens_out": 396
+  },
+  "Mbpp/100": {
+    "cost": 0.000308,
+    "tokens_in": 40,
+    "tokens_out": 743
+  },
+  "Mbpp/103": {
+    "cost": 0.00036239000000000003,
+    "tokens_in": 37,
+    "tokens_out": 881
+  },
+  "Mbpp/118": {
+    "cost": 0.00015027000000000004,
+    "tokens_in": 41,
+    "tokens_out": 348
+  },
+  "Mbpp/116": {
+    "cost": 0.00016146000000000002,
+    "tokens_in": 38,
+    "tokens_out": 378
+  },
+  "Mbpp/12": {
+    "cost": 0.00011095,
+    "tokens_in": 85,
+    "tokens_out": 220
+  },
+  "Mbpp/124": {
+    "cost": 5.644000000000001e-05,
+    "tokens_in": 52,
+    "tokens_out": 106
+  },
+  "Mbpp/119": {
+    "cost": 0.00020614000000000003,
+    "tokens_in": 42,
+    "tokens_out": 487
+  },
+  "Mbpp/126": {
+    "cost": 6.545e-05,
+    "tokens_in": 35,
+    "tokens_out": 140
+  },
+  "Mbpp/127": {
+    "cost": 2.9820000000000002e-05,
+    "tokens_in": 26,
+    "tokens_out": 57
+  },
+  "Mbpp/128": {
+    "cost": 5.0560000000000004e-05,
+    "tokens_in": 48,
+    "tokens_out": 94
+  },
+  "Mbpp/123": {
+    "cost": 0.00021825000000000002,
+    "tokens_in": 35,
+    "tokens_out": 522
+  },
+  "Mbpp/129": {
+    "cost": 0.00020439,
+    "tokens_in": 77,
+    "tokens_out": 459
+  },
+  "Mbpp/130": {
+    "cost": 0.00016118000000000003,
+    "tokens_in": 74,
+    "tokens_out": 353
+  },
+  "Mbpp/132": {
+    "cost": 6.472e-05,
+    "tokens_in": 56,
+    "tokens_out": 124
+  },
+  "Mbpp/133": {
+    "cost": 6.421000000000001e-05,
+    "tokens_in": 63,
+    "tokens_out": 118
+  },
+  "Mbpp/131": {
+    "cost": 0.0001288,
+    "tokens_in": 40,
+    "tokens_out": 295
+  },
+  "Mbpp/120": {
+    "cost": 0.0005952700000000001,
+    "tokens_in": 61,
+    "tokens_out": 1447
+  },
+  "Mbpp/109": {
+    "cost": 0.0009038900000000001,
+    "tokens_in": 47,
+    "tokens_out": 2228
+  },
+  "Mbpp/137": {
+    "cost": 7.336e-05,
+    "tokens_in": 88,
+    "tokens_out": 124
+  },
+  "Mbpp/139": {
+    "cost": 4.8960000000000006e-05,
+    "tokens_in": 48,
+    "tokens_out": 90
+  },
+  "Mbpp/135": {
+    "cost": 0.00011036000000000001,
+    "tokens_in": 28,
+    "tokens_out": 257
+  },
+  "Mbpp/14": {
+    "cost": 9.652e-05,
+    "tokens_in": 36,
+    "tokens_out": 217
+  },
+  "Mbpp/140": {
+    "cost": 8.878e-05,
+    "tokens_in": 74,
+    "tokens_out": 172
+  },
+  "Mbpp/125": {
+    "cost": 0.00070564,
+    "tokens_in": 52,
+    "tokens_out": 1729
+  },
+  "Mbpp/145": {
+    "cost": 6.935e-05,
+    "tokens_in": 45,
+    "tokens_out": 143
+  },
+  "Mbpp/142": {
+    "cost": 0.00010468000000000001,
+    "tokens_in": 84,
+    "tokens_out": 205
+  },
+  "Mbpp/141": {
+    "cost": 0.00017671,
+    "tokens_in": 53,
+    "tokens_out": 406
+  },
+  "Mbpp/16": {
+    "cost": 9.657e-05,
+    "tokens_in": 51,
+    "tokens_out": 207
+  },
+  "Mbpp/161": {
+    "cost": 9.363000000000001e-05,
+    "tokens_in": 89,
+    "tokens_out": 174
+  },
+  "Mbpp/160": {
+    "cost": 0.00015472,
+    "tokens_in": 56,
+    "tokens_out": 349
+  },
+  "Mbpp/167": {
+    "cost": 3.107e-05,
+    "tokens_in": 41,
+    "tokens_out": 50
+  },
+  "Mbpp/165": {
+    "cost": 0.00012857000000000002,
+    "tokens_in": 51,
+    "tokens_out": 287
+  },
+  "Mbpp/166": {
+    "cost": 0.00012471,
+    "tokens_in": 53,
+    "tokens_out": 276
+  },
+  "Mbpp/168": {
+    "cost": 5.6670000000000005e-05,
+    "tokens_in": 41,
+    "tokens_out": 114
+  },
+  "Mbpp/171": {
+    "cost": 3.813e-05,
+    "tokens_in": 39,
+    "tokens_out": 69
+  },
+  "Mbpp/17": {
+    "cost": 5.398000000000001e-05,
+    "tokens_in": 34,
+    "tokens_out": 112
+  },
+  "Mbpp/170": {
+    "cost": 6.209e-05,
+    "tokens_in": 67,
+    "tokens_out": 110
+  },
+  "Mbpp/172": {
+    "cost": 3.7090000000000006e-05,
+    "tokens_in": 47,
+    "tokens_out": 61
+  },
+  "Mbpp/162": {
+    "cost": 0.00024769,
+    "tokens_in": 67,
+    "tokens_out": 574
+  },
+  "Mbpp/19": {
+    "cost": 3.9880000000000004e-05,
+    "tokens_in": 44,
+    "tokens_out": 70
+  },
+  "Mbpp/138": {
+    "cost": 0.00045417000000000005,
+    "tokens_in": 51,
+    "tokens_out": 1101
+  },
+  "Mbpp/18": {
+    "cost": 0.00010069,
+    "tokens_in": 47,
+    "tokens_out": 220
+  },
+  "Mbpp/224": {
+    "cost": 6.387999999999999e-05,
+    "tokens_in": 44,
+    "tokens_out": 130
+  },
+  "Mbpp/2": {
+    "cost": 0.00014353,
+    "tokens_in": 59,
+    "tokens_out": 319
+  },
+  "Mbpp/222": {
+    "cost": 0.00016697,
+    "tokens_in": 51,
+    "tokens_out": 383
+  },
+  "Mbpp/226": {
+    "cost": 6.799e-05,
+    "tokens_in": 37,
+    "tokens_out": 145
+  },
+  "Mbpp/20": {
+    "cost": 0.00019278,
+    "tokens_in": 34,
+    "tokens_out": 459
+  },
+  "Mbpp/227": {
+    "cost": 7.344e-05,
+    "tokens_in": 32,
+    "tokens_out": 162
+  },
+  "Mbpp/234": {
+    "cost": 4.944e-05,
+    "tokens_in": 32,
+    "tokens_out": 102
+  },
+  "Mbpp/233": {
+    "cost": 8.058e-05,
+    "tokens_in": 54,
+    "tokens_out": 165
+  },
+  "Mbpp/232": {
+    "cost": 0.00010267000000000002,
+    "tokens_in": 81,
+    "tokens_out": 202
+  },
+  "Mbpp/230": {
+    "cost": 0.00011217,
+    "tokens_in": 51,
+    "tokens_out": 246
+  },
+  "Mbpp/237": {
+    "cost": 7.981e-05,
+    "tokens_in": 103,
+    "tokens_out": 130
+  },
+  "Mbpp/240": {
+    "cost": 8.551000000000001e-05,
+    "tokens_in": 93,
+    "tokens_out": 151
+  },
+  "Mbpp/238": {
+    "cost": 0.00014586,
+    "tokens_in": 38,
+    "tokens_out": 339
+  },
+  "Mbpp/242": {
+    "cost": 4.011000000000001e-05,
+    "tokens_in": 33,
+    "tokens_out": 78
+  },
+  "Mbpp/223": {
+    "cost": 0.0005032400000000001,
+    "tokens_in": 92,
+    "tokens_out": 1196
+  },
+  "Mbpp/244": {
+    "cost": 0.00014946000000000002,
+    "tokens_in": 38,
+    "tokens_out": 348
+  },
+  "Mbpp/245": {
+    "cost": 0.00021720000000000002,
+    "tokens_in": 80,
+    "tokens_out": 489
+  },
+  "Mbpp/250": {
+    "cost": 9.413e-05,
+    "tokens_in": 79,
+    "tokens_out": 182
+  },
+  "Mbpp/251": {
+    "cost": 0.00010277000000000002,
+    "tokens_in": 71,
+    "tokens_out": 209
+  },
+  "Mbpp/253": {
+    "cost": 8.721000000000001e-05,
+    "tokens_in": 43,
+    "tokens_out": 189
+  },
+  "Mbpp/252": {
+    "cost": 0.00029852000000000004,
+    "tokens_in": 36,
+    "tokens_out": 722
+  },
+  "Mbpp/247": {
+    "cost": 0.00045974000000000004,
+    "tokens_in": 42,
+    "tokens_out": 1121
+  },
+  "Mbpp/255": {
+    "cost": 0.00018864,
+    "tokens_in": 72,
+    "tokens_out": 423
+  },
+  "Mbpp/257": {
+    "cost": 9.361e-05,
+    "tokens_in": 43,
+    "tokens_out": 205
+  },
+  "Mbpp/256": {
+    "cost": 0.00013616000000000002,
+    "tokens_in": 48,
+    "tokens_out": 308
+  },
+  "Mbpp/260": {
+    "cost": 5.5060000000000005e-05,
+    "tokens_in": 38,
+    "tokens_out": 112
+  },
+  "Mbpp/261": {
+    "cost": 8.116000000000002e-05,
+    "tokens_in": 68,
+    "tokens_out": 157
+  },
+  "Mbpp/239": {
+    "cost": 0.0008259799999999999,
+    "tokens_in": 74,
+    "tokens_out": 2015
+  },
+  "Mbpp/235": {
+    "cost": 0.00082878,
+    "tokens_in": 34,
+    "tokens_out": 2049
+  },
+  "Mbpp/262": {
+    "cost": 7.486e-05,
+    "tokens_in": 98,
+    "tokens_out": 121
+  },
+  "Mbpp/264": {
+    "cost": 7.850000000000001e-05,
+    "tokens_in": 30,
+    "tokens_out": 176
+  },
+  "Mbpp/266": {
+    "cost": 7.651999999999999e-05,
+    "tokens_in": 36,
+    "tokens_out": 167
+  },
+  "Mbpp/259": {
+    "cost": 0.00027445000000000003,
+    "tokens_in": 95,
+    "tokens_out": 622
+  },
+  "Mbpp/269": {
+    "cost": 7.517e-05,
+    "tokens_in": 31,
+    "tokens_out": 167
+  },
+  "Mbpp/265": {
+    "cost": 0.00019056,
+    "tokens_in": 128,
+    "tokens_out": 390
+  },
+  "Mbpp/268": {
+    "cost": 0.00011637,
+    "tokens_in": 31,
+    "tokens_out": 270
+  },
+  "Mbpp/267": {
+    "cost": 0.00019228,
+    "tokens_in": 44,
+    "tokens_out": 451
+  },
+  "Mbpp/273": {
+    "cost": 5.1030000000000004e-05,
+    "tokens_in": 69,
+    "tokens_out": 81
+  },
+  "Mbpp/271": {
+    "cost": 9.497000000000001e-05,
+    "tokens_in": 51,
+    "tokens_out": 203
+  },
+  "Mbpp/270": {
+    "cost": 0.00015712000000000001,
+    "tokens_in": 56,
+    "tokens_out": 355
+  },
+  "Mbpp/272": {
+    "cost": 8.972e-05,
+    "tokens_in": 76,
+    "tokens_out": 173
+  },
+  "Mbpp/276": {
+    "cost": 9.446000000000001e-05,
+    "tokens_in": 58,
+    "tokens_out": 197
+  },
+  "Mbpp/279": {
+    "cost": 8.397000000000001e-05,
+    "tokens_in": 31,
+    "tokens_out": 189
+  },
+  "Mbpp/278": {
+    "cost": 9.632000000000001e-05,
+    "tokens_in": 56,
+    "tokens_out": 203
+  },
+  "Mbpp/277": {
+    "cost": 0.00012726000000000003,
+    "tokens_in": 98,
+    "tokens_out": 252
+  },
+  "Mbpp/274": {
+    "cost": 0.00015214999999999998,
+    "tokens_in": 45,
+    "tokens_out": 350
+  },
+  "Mbpp/281": {
+    "cost": 5.6930000000000006e-05,
+    "tokens_in": 39,
+    "tokens_out": 116
+  },
+  "Mbpp/282": {
+    "cost": 6.348000000000001e-05,
+    "tokens_in": 44,
+    "tokens_out": 129
+  },
+  "Mbpp/280": {
+    "cost": 0.00011255000000000001,
+    "tokens_in": 85,
+    "tokens_out": 224
+  },
+  "Mbpp/283": {
+    "cost": 0.00010362000000000001,
+    "tokens_in": 46,
+    "tokens_out": 228
+  },
+  "Mbpp/284": {
+    "cost": 0.00011298,
+    "tokens_in": 54,
+    "tokens_out": 246
+  },
+  "Mbpp/292": {
+    "cost": 5.6790000000000003e-05,
+    "tokens_in": 37,
+    "tokens_out": 117
+  },
+  "Mbpp/287": {
+    "cost": 0.00014867,
+    "tokens_in": 41,
+    "tokens_out": 344
+  },
+  "Mbpp/285": {
+    "cost": 0.00018535,
+    "tokens_in": 45,
+    "tokens_out": 433
+  },
+  "Mbpp/293": {
+    "cost": 8.400000000000001e-05,
+    "tokens_in": 40,
+    "tokens_out": 183
+  },
+  "Mbpp/290": {
+    "cost": 0.0002345,
+    "tokens_in": 70,
+    "tokens_out": 539
+  },
+  "Mbpp/299": {
+    "cost": 5.639000000000001e-05,
+    "tokens_in": 77,
+    "tokens_out": 89
+  },
+  "Mbpp/297": {
+    "cost": 0.00011327,
+    "tokens_in": 101,
+    "tokens_out": 215
+  },
+  "Mbpp/294": {
+    "cost": 0.00018722,
+    "tokens_in": 46,
+    "tokens_out": 437
+  },
+  "Mbpp/296": {
+    "cost": 0.00019547,
+    "tokens_in": 41,
+    "tokens_out": 461
+  },
+  "Mbpp/305": {
+    "cost": 7.950000000000001e-05,
+    "tokens_in": 50,
+    "tokens_out": 165
+  },
+  "Mbpp/301": {
+    "cost": 0.00012707000000000001,
+    "tokens_in": 41,
+    "tokens_out": 290
+  },
+  "Mbpp/3": {
+    "cost": 0.00021743000000000004,
+    "tokens_in": 29,
+    "tokens_out": 524
+  },
+  "Mbpp/309": {
+    "cost": 3.2370000000000003e-05,
+    "tokens_in": 31,
+    "tokens_out": 60
+  },
+  "Mbpp/300": {
+    "cost": 0.00024928,
+    "tokens_in": 64,
+    "tokens_out": 580
+  },
+  "Mbpp/310": {
+    "cost": 0.0001082,
+    "tokens_in": 60,
+    "tokens_out": 230
+  },
+  "Mbpp/312": {
+    "cost": 5.643e-05,
+    "tokens_in": 49,
+    "tokens_out": 108
+  },
+  "Mbpp/311": {
+    "cost": 0.00014012,
+    "tokens_in": 36,
+    "tokens_out": 326
+  },
+  "Mbpp/286": {
+    "cost": 0.00067688,
+    "tokens_in": 64,
+    "tokens_out": 1649
+  },
+  "Mbpp/308": {
+    "cost": 0.00028639999999999997,
+    "tokens_in": 80,
+    "tokens_out": 662
+  },
+  "Mbpp/390": {
+    "cost": 9.167e-05,
+    "tokens_in": 61,
+    "tokens_out": 188
+  },
+  "Mbpp/391": {
+    "cost": 0.00028136000000000003,
+    "tokens_in": 128,
+    "tokens_out": 617
+  },
+  "Mbpp/388": {
+    "cost": 8.201000000000001e-05,
+    "tokens_in": 43,
+    "tokens_out": 176
+  },
+  "Mbpp/389": {
+    "cost": 0.00019637,
+    "tokens_in": 31,
+    "tokens_out": 470
+  },
+  "Mbpp/397": {
+    "cost": 0.00010410999999999999,
+    "tokens_in": 33,
+    "tokens_out": 238
+  },
+  "Mbpp/395": {
+    "cost": 0.00016413000000000002,
+    "tokens_in": 39,
+    "tokens_out": 384
+  },
+  "Mbpp/392": {
+    "cost": 0.00024435,
+    "tokens_in": 65,
+    "tokens_out": 567
+  },
+  "Mbpp/398": {
+    "cost": 0.00013560000000000002,
+    "tokens_in": 40,
+    "tokens_out": 312
+  },
+  "Mbpp/404": {
+    "cost": 9.637e-05,
+    "tokens_in": 31,
+    "tokens_out": 220
+  },
+  "Mbpp/4": {
+    "cost": 0.00016051,
+    "tokens_in": 73,
+    "tokens_out": 352
+  },
+  "Mbpp/405": {
+    "cost": 5.021e-05,
+    "tokens_in": 63,
+    "tokens_out": 83
+  },
+  "Mbpp/406": {
+    "cost": 5.078e-05,
+    "tokens_in": 34,
+    "tokens_out": 104
+  },
+  "Mbpp/394": {
+    "cost": 0.00019695000000000002,
+    "tokens_in": 45,
+    "tokens_out": 462
+  },
+  "Mbpp/412": {
+    "cost": 4.5320000000000007e-05,
+    "tokens_in": 36,
+    "tokens_out": 89
+  },
+  "Mbpp/410": {
+    "cost": 7.682000000000001e-05,
+    "tokens_in": 46,
+    "tokens_out": 161
+  },
+  "Mbpp/414": {
+    "cost": 0.00010617000000000001,
+    "tokens_in": 51,
+    "tokens_out": 231
+  },
+  "Mbpp/409": {
+    "cost": 0.00012473,
+    "tokens_in": 59,
+    "tokens_out": 272
+  },
+  "Mbpp/415": {
+    "cost": 0.00015071,
+    "tokens_in": 53,
+    "tokens_out": 341
+  },
+  "Mbpp/413": {
+    "cost": 0.000213,
+    "tokens_in": 100,
+    "tokens_out": 465
+  },
+  "Mbpp/306": {
+    "cost": 0.00133442,
+    "tokens_in": 86,
+    "tokens_out": 3278
+  },
+  "Mbpp/421": {
+    "cost": 6.457e-05,
+    "tokens_in": 51,
+    "tokens_out": 127
+  },
+  "Mbpp/418": {
+    "cost": 7.684e-05,
+    "tokens_in": 52,
+    "tokens_out": 157
+  },
+  "Mbpp/420": {
+    "cost": 7.465e-05,
+    "tokens_in": 35,
+    "tokens_out": 163
+  },
+  "Mbpp/426": {
+    "cost": 8.021e-05,
+    "tokens_in": 63,
+    "tokens_out": 158
+  },
+  "Mbpp/425": {
+    "cost": 0.00012153000000000001,
+    "tokens_in": 59,
+    "tokens_out": 264
+  },
+  "Mbpp/424": {
+    "cost": 0.00013524,
+    "tokens_in": 52,
+    "tokens_out": 303
+  },
+  "Mbpp/427": {
+    "cost": 7.817e-05,
+    "tokens_in": 51,
+    "tokens_out": 161
+  },
+  "Mbpp/419": {
+    "cost": 0.00027122,
+    "tokens_in": 86,
+    "tokens_out": 620
+  },
+  "Mbpp/429": {
+    "cost": 0.00014062,
+    "tokens_in": 66,
+    "tokens_out": 307
+  },
+  "Mbpp/428": {
+    "cost": 0.00015695,
+    "tokens_in": 85,
+    "tokens_out": 335
+  },
+  "Mbpp/432": {
+    "cost": 0.00010972,
+    "tokens_in": 36,
+    "tokens_out": 250
+  },
+  "Mbpp/435": {
+    "cost": 5.8110000000000004e-05,
+    "tokens_in": 33,
+    "tokens_out": 123
+  },
+  "Mbpp/436": {
+    "cost": 3.947e-05,
+    "tokens_in": 41,
+    "tokens_out": 71
+  },
+  "Mbpp/422": {
+    "cost": 5.507e-05,
+    "tokens_in": 41,
+    "tokens_out": 110
+  },
+  "Mbpp/439": {
+    "cost": 7.307e-05,
+    "tokens_in": 41,
+    "tokens_out": 155
+  },
+  "Mbpp/433": {
+    "cost": 0.00018951000000000002,
+    "tokens_in": 53,
+    "tokens_out": 438
+  },
+  "Mbpp/437": {
+    "cost": 0.00013677,
+    "tokens_in": 31,
+    "tokens_out": 321
+  },
+  "Mbpp/441": {
+    "cost": 4.278000000000001e-05,
+    "tokens_in": 34,
+    "tokens_out": 84
+  },
+  "Mbpp/440": {
+    "cost": 0.00016030000000000002,
+    "tokens_in": 50,
+    "tokens_out": 367
+  },
+  "Mbpp/446": {
+    "cost": 9.38e-05,
+    "tokens_in": 60,
+    "tokens_out": 194
+  },
+  "Mbpp/447": {
+    "cost": 0.00010589,
+    "tokens_in": 87,
+    "tokens_out": 206
+  },
+  "Mbpp/445": {
+    "cost": 0.00015608,
+    "tokens_in": 104,
+    "tokens_out": 320
+  },
+  "Mbpp/430": {
+    "cost": 0.00040305,
+    "tokens_in": 35,
+    "tokens_out": 984
+  },
+  "Mbpp/450": {
+    "cost": 0.00010311000000000002,
+    "tokens_in": 53,
+    "tokens_out": 222
+  },
+  "Mbpp/451": {
+    "cost": 0.00012813,
+    "tokens_in": 39,
+    "tokens_out": 294
+  },
+  "Mbpp/454": {
+    "cost": 8.597e-05,
+    "tokens_in": 31,
+    "tokens_out": 194
+  },
+  "Mbpp/455": {
+    "cost": 6.612000000000001e-05,
+    "tokens_in": 36,
+    "tokens_out": 141
+  },
+  "Mbpp/453": {
+    "cost": 0.00015558,
+    "tokens_in": 34,
+    "tokens_out": 366
+  },
+  "Mbpp/457": {
+    "cost": 6.334e-05,
+    "tokens_in": 42,
+    "tokens_out": 130
+  },
+  "Mbpp/458": {
+    "cost": 2.7830000000000003e-05,
+    "tokens_in": 29,
+    "tokens_out": 50
+  },
+  "Mbpp/456": {
+    "cost": 8.342000000000001e-05,
+    "tokens_in": 66,
+    "tokens_out": 164
+  },
+  "Mbpp/448": {
+    "cost": 0.00024330000000000003,
+    "tokens_in": 30,
+    "tokens_out": 588
+  },
+  "Mbpp/460": {
+    "cost": 6.727e-05,
+    "tokens_in": 61,
+    "tokens_out": 127
+  },
+  "Mbpp/465": {
+    "cost": 8.326e-05,
+    "tokens_in": 58,
+    "tokens_out": 169
+  },
+  "Mbpp/459": {
+    "cost": 0.0001407,
+    "tokens_in": 50,
+    "tokens_out": 318
+  },
+  "Mbpp/470": {
+    "cost": 5.539e-05,
+    "tokens_in": 57,
+    "tokens_out": 100
+  },
+  "Mbpp/463": {
+    "cost": 0.00016711,
+    "tokens_in": 53,
+    "tokens_out": 382
+  },
+  "Mbpp/471": {
+    "cost": 8.164000000000001e-05,
+    "tokens_in": 52,
+    "tokens_out": 169
+  },
+  "Mbpp/472": {
+    "cost": 6.108e-05,
+    "tokens_in": 44,
+    "tokens_out": 123
+  },
+  "Mbpp/462": {
+    "cost": 0.00024393,
+    "tokens_in": 139,
+    "tokens_out": 516
+  },
+  "Mbpp/474": {
+    "cost": 6.905e-05,
+    "tokens_in": 35,
+    "tokens_out": 149
+  },
+  "Mbpp/475": {
+    "cost": 8.232000000000001e-05,
+    "tokens_in": 56,
+    "tokens_out": 168
+  },
+  "Mbpp/477": {
+    "cost": 2.1309999999999998e-05,
+    "tokens_in": 33,
+    "tokens_out": 31
+  },
+  "Mbpp/476": {
+    "cost": 0.00011467000000000001,
+    "tokens_in": 41,
+    "tokens_out": 259
+  },
+  "Mbpp/479": {
+    "cost": 6.571e-05,
+    "tokens_in": 33,
+    "tokens_out": 142
+  },
+  "Mbpp/473": {
+    "cost": 0.00023741000000000002,
+    "tokens_in": 103,
+    "tokens_out": 524
+  },
+  "Mbpp/554": {
+    "cost": 0.00011216,
+    "tokens_in": 48,
+    "tokens_out": 248
+  },
+  "Mbpp/555": {
+    "cost": 8.802000000000001e-05,
+    "tokens_in": 46,
+    "tokens_out": 189
+  },
+  "Mbpp/478": {
+    "cost": 0.00016132,
+    "tokens_in": 36,
+    "tokens_out": 379
+  },
+  "Mbpp/557": {
+    "cost": 4.105e-05,
+    "tokens_in": 35,
+    "tokens_out": 79
+  },
+  "Mbpp/558": {
+    "cost": 0.00010613,
+    "tokens_in": 39,
+    "tokens_out": 239
+  },
+  "Mbpp/56": {
+    "cost": 8.638000000000001e-05,
+    "tokens_in": 34,
+    "tokens_out": 193
+  },
+  "Mbpp/562": {
+    "cost": 2.349e-05,
+    "tokens_in": 47,
+    "tokens_out": 27
+  },
+  "Mbpp/560": {
+    "cost": 5.452e-05,
+    "tokens_in": 76,
+    "tokens_out": 85
+  },
+  "Mbpp/556": {
+    "cost": 0.00020308999999999998,
+    "tokens_in": 47,
+    "tokens_out": 476
+  },
+  "Mbpp/565": {
+    "cost": 3.546e-05,
+    "tokens_in": 38,
+    "tokens_out": 63
+  },
+  "Mbpp/559": {
+    "cost": 0.00018261000000000002,
+    "tokens_in": 63,
+    "tokens_out": 414
+  },
+  "Mbpp/566": {
+    "cost": 6.0110000000000006e-05,
+    "tokens_in": 33,
+    "tokens_out": 128
+  },
+  "Mbpp/567": {
+    "cost": 9.230000000000002e-05,
+    "tokens_in": 50,
+    "tokens_out": 197
+  },
+  "Mbpp/568": {
+    "cost": 5.1710000000000005e-05,
+    "tokens_in": 33,
+    "tokens_out": 107
+  },
+  "Mbpp/564": {
+    "cost": 0.00018163,
+    "tokens_in": 49,
+    "tokens_out": 421
+  },
+  "Mbpp/563": {
+    "cost": 0.00018895,
+    "tokens_in": 45,
+    "tokens_out": 442
+  },
+  "Mbpp/57": {
+    "cost": 7.215e-05,
+    "tokens_in": 45,
+    "tokens_out": 150
+  },
+  "Mbpp/573": {
+    "cost": 0.00010926000000000001,
+    "tokens_in": 58,
+    "tokens_out": 234
+  },
+  "Mbpp/569": {
+    "cost": 0.00015479,
+    "tokens_in": 77,
+    "tokens_out": 335
+  },
+  "Mbpp/572": {
+    "cost": 0.00014551,
+    "tokens_in": 53,
+    "tokens_out": 328
+  },
+  "Mbpp/576": {
+    "cost": 0.00010229000000000001,
+    "tokens_in": 47,
+    "tokens_out": 224
+  },
+  "Mbpp/578": {
+    "cost": 0.00016073000000000001,
+    "tokens_in": 139,
+    "tokens_out": 308
+  },
+  "Mbpp/58": {
+    "cost": 0.00010706000000000001,
+    "tokens_in": 38,
+    "tokens_out": 242
+  },
+  "Mbpp/579": {
+    "cost": 0.00014608,
+    "tokens_in": 64,
+    "tokens_out": 322
+  },
+  "Mbpp/580": {
+    "cost": 8.636e-05,
+    "tokens_in": 68,
+    "tokens_out": 170
+  },
+  "Mbpp/577": {
+    "cost": 0.00023119000000000001,
+    "tokens_in": 37,
+    "tokens_out": 553
+  },
+  "Mbpp/586": {
+    "cost": 6.128e-05,
+    "tokens_in": 64,
+    "tokens_out": 110
+  },
+  "Mbpp/583": {
+    "cost": 0.00012796,
+    "tokens_in": 28,
+    "tokens_out": 301
+  },
+  "Mbpp/585": {
+    "cost": 0.000116,
+    "tokens_in": 80,
+    "tokens_out": 236
+  },
+  "Mbpp/587": {
+    "cost": 4.673000000000001e-05,
+    "tokens_in": 59,
+    "tokens_out": 77
+  },
+  "Mbpp/59": {
+    "cost": 4.4370000000000004e-05,
+    "tokens_in": 31,
+    "tokens_out": 90
+  },
+  "Mbpp/588": {
+    "cost": 0.00012134,
+    "tokens_in": 42,
+    "tokens_out": 275
+  },
+  "Mbpp/589": {
+    "cost": 0.00018068,
+    "tokens_in": 44,
+    "tokens_out": 422
+  },
+  "Mbpp/591": {
+    "cost": 7.606e-05,
+    "tokens_in": 58,
+    "tokens_out": 151
+  },
+  "Mbpp/593": {
+    "cost": 0.00010028000000000001,
+    "tokens_in": 44,
+    "tokens_out": 221
+  },
+  "Mbpp/594": {
+    "cost": 7.538000000000001e-05,
+    "tokens_in": 54,
+    "tokens_out": 152
+  },
+  "Mbpp/590": {
+    "cost": 0.00039633,
+    "tokens_in": 59,
+    "tokens_out": 951
+  },
+  "Mbpp/592": {
+    "cost": 0.00032266000000000006,
+    "tokens_in": 38,
+    "tokens_out": 781
+  },
+  "Mbpp/581": {
+    "cost": 0.0007217400000000001,
+    "tokens_in": 42,
+    "tokens_out": 1776
+  },
+  "Mbpp/598": {
+    "cost": 5.264e-05,
+    "tokens_in": 32,
+    "tokens_out": 110
+  },
+  "Mbpp/596": {
+    "cost": 0.00026315999999999997,
+    "tokens_in": 68,
+    "tokens_out": 612
+  },
+  "Mbpp/599": {
+    "cost": 7.159000000000001e-05,
+    "tokens_in": 37,
+    "tokens_out": 154
+  },
+  "Mbpp/6": {
+    "cost": 0.00011375,
+    "tokens_in": 45,
+    "tokens_out": 254
+  },
+  "Mbpp/597": {
+    "cost": 0.00022687000000000003,
+    "tokens_in": 61,
+    "tokens_out": 526
+  },
+  "Mbpp/600": {
+    "cost": 5.211e-05,
+    "tokens_in": 33,
+    "tokens_out": 108
+  },
+  "Mbpp/602": {
+    "cost": 8.572e-05,
+    "tokens_in": 36,
+    "tokens_out": 190
+  },
+  "Mbpp/604": {
+    "cost": 4.572e-05,
+    "tokens_in": 36,
+    "tokens_out": 90
+  },
+  "Mbpp/605": {
+    "cost": 8.170000000000002e-05,
+    "tokens_in": 30,
+    "tokens_out": 184
+  },
+  "Mbpp/606": {
+    "cost": 5.198e-05,
+    "tokens_in": 34,
+    "tokens_out": 107
+  },
+  "Mbpp/607": {
+    "cost": 9.622000000000001e-05,
+    "tokens_in": 66,
+    "tokens_out": 196
+  },
+  "Mbpp/610": {
+    "cost": 0.00011839000000000001,
+    "tokens_in": 77,
+    "tokens_out": 244
+  },
+  "Mbpp/611": {
+    "cost": 0.00017023,
+    "tokens_in": 69,
+    "tokens_out": 379
+  },
+  "Mbpp/612": {
+    "cost": 9.899e-05,
+    "tokens_in": 97,
+    "tokens_out": 182
+  },
+  "Mbpp/608": {
+    "cost": 0.00039183,
+    "tokens_in": 29,
+    "tokens_out": 960
+  },
+  "Mbpp/614": {
+    "cost": 7.367e-05,
+    "tokens_in": 61,
+    "tokens_out": 143
+  },
+  "Mbpp/615": {
+    "cost": 0.00010727000000000001,
+    "tokens_in": 101,
+    "tokens_out": 200
+  },
+  "Mbpp/616": {
+    "cost": 5.369000000000001e-05,
+    "tokens_in": 67,
+    "tokens_out": 89
+  },
+  "Mbpp/618": {
+    "cost": 8.510000000000001e-05,
+    "tokens_in": 50,
+    "tokens_out": 179
+  },
+  "Mbpp/62": {
+    "cost": 8.013999999999999e-05,
+    "tokens_in": 42,
+    "tokens_out": 172
+  },
+  "Mbpp/619": {
+    "cost": 0.00018218000000000005,
+    "tokens_in": 54,
+    "tokens_out": 419
+  },
+  "Mbpp/603": {
+    "cost": 0.0008007,
+    "tokens_in": 50,
+    "tokens_out": 1968
+  },
+  "Mbpp/622": {
+    "cost": 0.00015622,
+    "tokens_in": 66,
+    "tokens_out": 346
+  },
+  "Mbpp/623": {
+    "cost": 9.990000000000002e-05,
+    "tokens_in": 90,
+    "tokens_out": 189
+  },
+  "Mbpp/624": {
+    "cost": 3.9040000000000006e-05,
+    "tokens_in": 32,
+    "tokens_out": 76
+  },
+  "Mbpp/620": {
+    "cost": 0.00025833000000000003,
+    "tokens_in": 59,
+    "tokens_out": 606
+  },
+  "Mbpp/628": {
+    "cost": 5.1760000000000006e-05,
+    "tokens_in": 48,
+    "tokens_out": 97
+  },
+  "Mbpp/629": {
+    "cost": 0.00010947000000000001,
+    "tokens_in": 41,
+    "tokens_out": 246
+  },
+  "Mbpp/630": {
+    "cost": 0.00010456000000000002,
+    "tokens_in": 88,
+    "tokens_out": 202
+  },
+  "Mbpp/468": {
+    "cost": 0.0027388499999999997,
+    "tokens_in": 55,
+    "tokens_out": 6810
+  },
+  "Mbpp/626": {
+    "cost": 0.00026494,
+    "tokens_in": 42,
+    "tokens_out": 634
+  },
+  "Mbpp/63": {
+    "cost": 0.00024473,
+    "tokens_in": 59,
+    "tokens_out": 572
+  },
+  "Mbpp/631": {
+    "cost": 0.00013309,
+    "tokens_in": 47,
+    "tokens_out": 301
+  },
+  "Mbpp/61": {
+    "cost": 0.00119814,
+    "tokens_in": 42,
+    "tokens_out": 2967
+  },
+  "Mbpp/635": {
+    "cost": 0.00011587,
+    "tokens_in": 81,
+    "tokens_out": 235
+  },
+  "Mbpp/633": {
+    "cost": 0.00014043,
+    "tokens_in": 49,
+    "tokens_out": 318
+  },
+  "Mbpp/637": {
+    "cost": 6.24e-05,
+    "tokens_in": 40,
+    "tokens_out": 129
+  },
+  "Mbpp/632": {
+    "cost": 0.00018525,
+    "tokens_in": 55,
+    "tokens_out": 426
+  },
+  "Mbpp/639": {
+    "cost": 8.729e-05,
+    "tokens_in": 67,
+    "tokens_out": 173
+  },
+  "Mbpp/64": {
+    "cost": 0.00015135000000000002,
+    "tokens_in": 85,
+    "tokens_out": 321
+  },
+  "Mbpp/65": {
+    "cost": 8.762e-05,
+    "tokens_in": 46,
+    "tokens_out": 188
+  },
+  "Mbpp/641": {
+    "cost": 0.00013250000000000002,
+    "tokens_in": 30,
+    "tokens_out": 311
+  },
+  "Mbpp/644": {
+    "cost": 9.916000000000002e-05,
+    "tokens_in": 68,
+    "tokens_out": 202
+  },
+  "Mbpp/643": {
+    "cost": 0.00022695000000000001,
+    "tokens_in": 45,
+    "tokens_out": 537
+  },
+  "Mbpp/638": {
+    "cost": 0.00025122,
+    "tokens_in": 46,
+    "tokens_out": 597
+  },
+  "Mbpp/69": {
+    "cost": 3.949e-05,
+    "tokens_in": 47,
+    "tokens_out": 67
+  },
+  "Mbpp/66": {
+    "cost": 7.172999999999999e-05,
+    "tokens_in": 39,
+    "tokens_out": 153
+  },
+  "Mbpp/7": {
+    "cost": 8.471000000000001e-05,
+    "tokens_in": 53,
+    "tokens_out": 176
+  },
+  "Mbpp/68": {
+    "cost": 9.935e-05,
+    "tokens_in": 45,
+    "tokens_out": 218
+  },
+  "Mbpp/71": {
+    "cost": 9.404000000000001e-05,
+    "tokens_in": 52,
+    "tokens_out": 200
+  },
+  "Mbpp/720": {
+    "cost": 8.164000000000001e-05,
+    "tokens_in": 92,
+    "tokens_out": 142
+  },
+  "Mbpp/72": {
+    "cost": 8.440000000000002e-05,
+    "tokens_in": 40,
+    "tokens_out": 184
+  },
+  "Mbpp/70": {
+    "cost": 0.00014270000000000003,
+    "tokens_in": 50,
+    "tokens_out": 323
+  },
+  "Mbpp/723": {
+    "cost": 0.00010363000000000001,
+    "tokens_in": 89,
+    "tokens_out": 199
+  },
+  "Mbpp/724": {
+    "cost": 7.828e-05,
+    "tokens_in": 44,
+    "tokens_out": 166
+  },
+  "Mbpp/726": {
+    "cost": 9.402999999999999e-05,
+    "tokens_in": 89,
+    "tokens_out": 175
+  },
+  "Mbpp/722": {
+    "cost": 0.00021899000000000002,
+    "tokens_in": 137,
+    "tokens_out": 455
+  },
+  "Mbpp/721": {
+    "cost": 0.00028471000000000003,
+    "tokens_in": 133,
+    "tokens_out": 622
+  },
+  "Mbpp/728": {
+    "cost": 0.00011477000000000001,
+    "tokens_in": 71,
+    "tokens_out": 239
+  },
+  "Mbpp/730": {
+    "cost": 0.00015689,
+    "tokens_in": 107,
+    "tokens_out": 320
+  },
+  "Mbpp/67": {
+    "cost": 0.00047931000000000004,
+    "tokens_in": 33,
+    "tokens_out": 1176
+  },
+  "Mbpp/731": {
+    "cost": 9.989000000000001e-05,
+    "tokens_in": 47,
+    "tokens_out": 218
+  },
+  "Mbpp/732": {
+    "cost": 0.00014670000000000002,
+    "tokens_in": 50,
+    "tokens_out": 333
+  },
+  "Mbpp/733": {
+    "cost": 0.00011077,
+    "tokens_in": 71,
+    "tokens_out": 229
+  },
+  "Mbpp/725": {
+    "cost": 0.00035939,
+    "tokens_in": 57,
+    "tokens_out": 860
+  },
+  "Mbpp/739": {
+    "cost": 6.052e-05,
+    "tokens_in": 36,
+    "tokens_out": 127
+  },
+  "Mbpp/734": {
+    "cost": 0.00020656000000000003,
+    "tokens_in": 48,
+    "tokens_out": 484
+  },
+  "Mbpp/736": {
+    "cost": 0.00013881,
+    "tokens_in": 43,
+    "tokens_out": 318
+  },
+  "Mbpp/737": {
+    "cost": 0.00014531,
+    "tokens_in": 33,
+    "tokens_out": 341
+  },
+  "Mbpp/741": {
+    "cost": 6.745e-05,
+    "tokens_in": 35,
+    "tokens_out": 145
+  },
+  "Mbpp/740": {
+    "cost": 0.00010249,
+    "tokens_in": 67,
+    "tokens_out": 211
+  },
+  "Mbpp/735": {
+    "cost": 0.0003056,
+    "tokens_in": 40,
+    "tokens_out": 737
+  },
+  "Mbpp/742": {
+    "cost": 0.00012986,
+    "tokens_in": 38,
+    "tokens_out": 299
+  },
+  "Mbpp/744": {
+    "cost": 9.614999999999999e-05,
+    "tokens_in": 45,
+    "tokens_out": 210
+  },
+  "Mbpp/74": {
+    "cost": 0.00030016,
+    "tokens_in": 48,
+    "tokens_out": 718
+  },
+  "Mbpp/749": {
+    "cost": 8.773e-05,
+    "tokens_in": 79,
+    "tokens_out": 166
+  },
+  "Mbpp/748": {
+    "cost": 0.00011639000000000002,
+    "tokens_in": 37,
+    "tokens_out": 266
+  },
+  "Mbpp/75": {
+    "cost": 8.838000000000002e-05,
+    "tokens_in": 74,
+    "tokens_out": 171
+  },
+  "Mbpp/745": {
+    "cost": 0.00023015000000000004,
+    "tokens_in": 85,
+    "tokens_out": 518
+  },
+  "Mbpp/750": {
+    "cost": 0.00013685,
+    "tokens_in": 55,
+    "tokens_out": 305
+  },
+  "Mbpp/743": {
+    "cost": 0.00032884,
+    "tokens_in": 92,
+    "tokens_out": 760
+  },
+  "Mbpp/752": {
+    "cost": 0.00012827000000000002,
+    "tokens_in": 81,
+    "tokens_out": 266
+  },
+  "Mbpp/754": {
+    "cost": 0.00012509,
+    "tokens_in": 127,
+    "tokens_out": 227
+  },
+  "Mbpp/753": {
+    "cost": 0.00018296000000000002,
+    "tokens_in": 88,
+    "tokens_out": 398
+  },
+  "Mbpp/757": {
+    "cost": 8.698000000000001e-05,
+    "tokens_in": 54,
+    "tokens_out": 181
+  },
+  "Mbpp/755": {
+    "cost": 0.00013736000000000003,
+    "tokens_in": 48,
+    "tokens_out": 311
+  },
+  "Mbpp/751": {
+    "cost": 0.00026643,
+    "tokens_in": 49,
+    "tokens_out": 633
+  },
+  "Mbpp/760": {
+    "cost": 5.547000000000001e-05,
+    "tokens_in": 41,
+    "tokens_out": 111
+  },
+  "Mbpp/758": {
+    "cost": 0.00014272,
+    "tokens_in": 136,
+    "tokens_out": 265
+  },
+  "Mbpp/762": {
+    "cost": 7.629e-05,
+    "tokens_in": 47,
+    "tokens_out": 159
+  },
+  "Mbpp/759": {
+    "cost": 0.00011560000000000002,
+    "tokens_in": 40,
+    "tokens_out": 262
+  },
+  "Mbpp/764": {
+    "cost": 6.0920000000000006e-05,
+    "tokens_in": 36,
+    "tokens_out": 128
+  },
+  "Mbpp/763": {
+    "cost": 0.00014030000000000002,
+    "tokens_in": 50,
+    "tokens_out": 317
+  },
+  "Mbpp/766": {
+    "cost": 0.0001299,
+    "tokens_in": 90,
+    "tokens_out": 264
+  },
+  "Mbpp/767": {
+    "cost": 0.0001522,
+    "tokens_in": 60,
+    "tokens_out": 340
+  },
+  "Mbpp/770": {
+    "cost": 9.199e-05,
+    "tokens_in": 37,
+    "tokens_out": 205
+  },
+  "Mbpp/77": {
+    "cost": 0.00015238,
+    "tokens_in": 34,
+    "tokens_out": 358
+  },
+  "Mbpp/772": {
+    "cost": 6.0950000000000004e-05,
+    "tokens_in": 45,
+    "tokens_out": 122
+  },
+  "Mbpp/769": {
+    "cost": 0.00026622,
+    "tokens_in": 66,
+    "tokens_out": 621
+  },
+  "Mbpp/765": {
+    "cost": 0.00030453,
+    "tokens_in": 39,
+    "tokens_out": 735
+  },
+  "Mbpp/771": {
+    "cost": 0.00014772,
+    "tokens_in": 36,
+    "tokens_out": 345
+  },
+  "Mbpp/773": {
+    "cost": 0.00012619,
+    "tokens_in": 57,
+    "tokens_out": 277
+  },
+  "Mbpp/775": {
+    "cost": 0.00015243000000000003,
+    "tokens_in": 49,
+    "tokens_out": 348
+  },
+  "Mbpp/781": {
+    "cost": 0.0001021,
+    "tokens_in": 30,
+    "tokens_out": 235
+  },
+  "Mbpp/778": {
+    "cost": 0.00019723,
+    "tokens_in": 129,
+    "tokens_out": 406
+  },
+  "Mbpp/780": {
+    "cost": 0.00020938,
+    "tokens_in": 94,
+    "tokens_out": 460
+  },
+  "Mbpp/782": {
+    "cost": 0.00011093,
+    "tokens_in": 39,
+    "tokens_out": 251
+  },
+  "Mbpp/777": {
+    "cost": 0.00024070000000000002,
+    "tokens_in": 50,
+    "tokens_out": 568
+  },
+  "Mbpp/784": {
+    "cost": 0.00011284000000000001,
+    "tokens_in": 52,
+    "tokens_out": 247
+  },
+  "Mbpp/785": {
+    "cost": 9.148000000000001e-05,
+    "tokens_in": 44,
+    "tokens_out": 199
+  },
+  "Mbpp/787": {
+    "cost": 9.118e-05,
+    "tokens_in": 34,
+    "tokens_out": 205
+  },
+  "Mbpp/79": {
+    "cost": 6.625000000000001e-05,
+    "tokens_in": 35,
+    "tokens_out": 142
+  },
+  "Mbpp/788": {
+    "cost": 8.175000000000001e-05,
+    "tokens_in": 45,
+    "tokens_out": 174
+  },
+  "Mbpp/786": {
+    "cost": 0.00011054,
+    "tokens_in": 42,
+    "tokens_out": 248
+  },
+  "Mbpp/791": {
+    "cost": 8.578000000000001e-05,
+    "tokens_in": 54,
+    "tokens_out": 178
+  },
+  "Mbpp/794": {
+    "cost": 6.907e-05,
+    "tokens_in": 41,
+    "tokens_out": 145
+  },
+  "Mbpp/792": {
+    "cost": 8.793000000000001e-05,
+    "tokens_in": 59,
+    "tokens_out": 180
+  },
+  "Mbpp/790": {
+    "cost": 0.00014333,
+    "tokens_in": 39,
+    "tokens_out": 332
+  },
+  "Mbpp/793": {
+    "cost": 9.840000000000002e-05,
+    "tokens_in": 40,
+    "tokens_out": 219
+  },
+  "Mbpp/796": {
+    "cost": 3.935000000000001e-05,
+    "tokens_in": 45,
+    "tokens_out": 68
+  },
+  "Mbpp/798": {
+    "cost": 3.132e-05,
+    "tokens_in": 36,
+    "tokens_out": 54
+  },
+  "Mbpp/800": {
+    "cost": 5.7850000000000003e-05,
+    "tokens_in": 35,
+    "tokens_out": 121
+  },
+  "Mbpp/799": {
+    "cost": 9.922000000000002e-05,
+    "tokens_in": 46,
+    "tokens_out": 217
+  },
+  "Mbpp/801": {
+    "cost": 3.48e-05,
+    "tokens_in": 40,
+    "tokens_out": 60
+  },
+  "Mbpp/797": {
+    "cost": 0.00010387,
+    "tokens_in": 41,
+    "tokens_out": 232
+  },
+  "Mbpp/805": {
+    "cost": 7.05e-05,
+    "tokens_in": 70,
+    "tokens_out": 129
+  },
+  "Mbpp/804": {
+    "cost": 5.946e-05,
+    "tokens_in": 38,
+    "tokens_out": 123
+  },
+  "Mbpp/8": {
+    "cost": 0.00017242000000000003,
+    "tokens_in": 86,
+    "tokens_out": 373
+  },
+  "Mbpp/80": {
+    "cost": 0.0001609,
+    "tokens_in": 30,
+    "tokens_out": 382
+  },
+  "Mbpp/806": {
+    "cost": 4.9080000000000004e-05,
+    "tokens_in": 44,
+    "tokens_out": 93
+  },
+  "Mbpp/807": {
+    "cost": 6e-05,
+    "tokens_in": 40,
+    "tokens_out": 123
+  },
+  "Mbpp/82": {
+    "cost": 5.309000000000001e-05,
+    "tokens_in": 47,
+    "tokens_out": 101
+  },
+  "Mbpp/808": {
+    "cost": 9.469e-05,
+    "tokens_in": 47,
+    "tokens_out": 205
+  },
+  "Mbpp/85": {
+    "cost": 4.75e-05,
+    "tokens_in": 50,
+    "tokens_out": 85
+  },
+  "Mbpp/809": {
+    "cost": 0.00012272000000000002,
+    "tokens_in": 56,
+    "tokens_out": 269
+  },
+  "Mbpp/803": {
+    "cost": 0.00020425000000000003,
+    "tokens_in": 35,
+    "tokens_out": 487
+  },
+  "Mbpp/86": {
+    "cost": 5.877000000000001e-05,
+    "tokens_in": 31,
+    "tokens_out": 126
+  },
+  "Mbpp/87": {
+    "cost": 9.893e-05,
+    "tokens_in": 119,
+    "tokens_out": 167
+  },
+  "Mbpp/89": {
+    "cost": 6.570000000000001e-05,
+    "tokens_in": 30,
+    "tokens_out": 144
+  },
+  "Mbpp/88": {
+    "cost": 9.483e-05,
+    "tokens_in": 89,
+    "tokens_out": 177
+  },
+  "Mbpp/92": {
+    "cost": 6.572e-05,
+    "tokens_in": 36,
+    "tokens_out": 140
+  },
+  "Mbpp/84": {
+    "cost": 0.00021971,
+    "tokens_in": 33,
+    "tokens_out": 527
+  },
+  "Mbpp/90": {
+    "cost": 0.00011292,
+    "tokens_in": 36,
+    "tokens_out": 258
+  },
+  "Mbpp/93": {
+    "cost": 5.8120000000000006e-05,
+    "tokens_in": 36,
+    "tokens_out": 121
+  },
+  "Mbpp/94": {
+    "cost": 6.742e-05,
+    "tokens_in": 66,
+    "tokens_out": 124
+  },
+  "Mbpp/91": {
+    "cost": 0.00016858000000000002,
+    "tokens_in": 54,
+    "tokens_out": 385
+  },
+  "Mbpp/95": {
+    "cost": 6.801000000000001e-05,
+    "tokens_in": 43,
+    "tokens_out": 141
+  },
+  "Mbpp/98": {
+    "cost": 6.968000000000001e-05,
+    "tokens_in": 64,
+    "tokens_out": 131
+  },
+  "Mbpp/99": {
+    "cost": 7.548e-05,
+    "tokens_in": 44,
+    "tokens_out": 159
+  },
+  "Mbpp/96": {
+    "cost": 0.00016144,
+    "tokens_in": 32,
+    "tokens_out": 382
+  },
+  "Mbpp/97": {
+    "cost": 0.00017828000000000003,
+    "tokens_in": 124,
+    "tokens_out": 362
+  },
+  "Mbpp/9": {
+    "cost": 0.00036361,
+    "tokens_in": 43,
+    "tokens_out": 880
+  }
+}

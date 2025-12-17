@@ -1,0 +1,8 @@
+{
+  "model": "openai/gpt-oss-120b",
+  "dataset": "mbpp",
+  "total_cost": 0.09836465,
+  "total_tokens_in": 38509,
+  "total_tokens_out": 401830,
+  "num_tasks": 378
+}

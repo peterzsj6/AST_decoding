@@ -1,0 +1,8 @@
+{
+  "model": "moonshotai/Kimi-K2-Instruct-0905",
+  "dataset": "humaneval",
+  "total_cost": 0.11616299999999993,
+  "total_tokens_in": 26418,
+  "total_tokens_out": 51477,
+  "num_tasks": 164
+}

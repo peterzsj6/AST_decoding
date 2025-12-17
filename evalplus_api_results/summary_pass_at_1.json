@@ -1,0 +1,78 @@
+{
+  "humaneval": {
+    "openai_gpt-oss-120b": {
+      "pass@1_base": 0.9573170731707317,
+      "pass@1_plus": 0.8902439024390244
+    },
+    "moonshotai_Kimi-K2-Instruct-0905": {
+      "pass@1_base": 0.9329268292682927,
+      "pass@1_plus": 0.8902439024390244
+    },
+    "Qwen_Qwen3-235B-A22B-Instruct-2507": {
+      "pass@1_base": 0.8841463414634146,
+      "pass@1_plus": 0.8414634146341463
+    },
+    "deepseek-ai_DeepSeek-V3.1-Terminus": {
+      "pass@1_base": 0.9329268292682927,
+      "pass@1_plus": 0.8841463414634146
+    },
+    "google_gemma-3-12b-it": {
+      "pass@1_base": 0.8353658536585366,
+      "pass@1_plus": 0.774390243902439
+    },
+    "mistralai_Mistral-Small-3.2-24B-Instruct-2506": {
+      "pass@1_base": 0.9207317073170732,
+      "pass@1_plus": 0.8780487804878049
+    },
+    "MiniMaxAI_MiniMax-M2": {
+      "pass@1_base": 0.9573170731707317,
+      "pass@1_plus": 0.8902439024390244
+    },
+    "google_gemma-3-27b-it": {
+      "pass@1_base": 0.9085365853658537,
+      "pass@1_plus": 0.823170731707317
+    },
+    "deepseek-ai_DeepSeek-V3.2-Exp": {
+      "pass@1_base": 0.9207317073170732,
+      "pass@1_plus": 0.8536585365853658
+    }
+  },
+  "mbpp": {
+    "openai_gpt-oss-120b": {
+      "pass@1_base": 0.8862433862433863,
+      "pass@1_plus": 0.7116402116402116
+    },
+    "moonshotai_Kimi-K2-Instruct-0905": {
+      "pass@1_base": 0.9074074074074074,
+      "pass@1_plus": 0.7513227513227513
+    },
+    "Qwen_Qwen3-235B-A22B-Instruct-2507": {
+      "pass@1_base": 0.9285714285714286,
+      "pass@1_plus": 0.783068783068783
+    },
+    "deepseek-ai_DeepSeek-V3.1-Terminus": {
+      "pass@1_base": 0.9153439153439153,
+      "pass@1_plus": 0.7513227513227513
+    },
+    "google_gemma-3-12b-it": {
+      "pass@1_base": 0.873015873015873,
+      "pass@1_plus": 0.746031746031746
+    },
+    "mistralai_Mistral-Small-3.2-24B-Instruct-2506": {
+      "pass@1_base": 0.8253968253968254,
+      "pass@1_plus": 0.7063492063492064
+    },
+    "MiniMaxAI_MiniMax-M2": {
+      "pass@1_base": 0.9074074074074074,
+      "pass@1_plus": 0.7248677248677249
+    },
+    "google_gemma-3-27b-it": {
+      "pass@1_base": 0.8888888888888888,
+      "pass@1_plus": 0.746031746031746
+    },
+    "deepseek-ai_DeepSeek-V3.2-Exp": {
+      "pass@1_base": 0.8994708994708994,
+      "pass@1_plus": 0.746031746031746
+    }
+  }
+}

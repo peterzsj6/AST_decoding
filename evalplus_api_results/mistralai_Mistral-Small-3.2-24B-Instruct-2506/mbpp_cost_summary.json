@@ -1,0 +1,8 @@
+{
+  "model": "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+  "dataset": "mbpp",
+  "total_cost": 0.05120817499999998,
+  "total_tokens_in": 20605,
+  "total_tokens_out": 248314,
+  "num_tasks": 378
+}

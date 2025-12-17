@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import os
 # Note: CUDA_VISIBLE_DEVICES should be set by the calling script, not here
 import torch
@@ -6,8 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers import Qwen2ForCausalLM, Qwen2Config
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 
 
 # =========================
@@ -76,7 +75,7 @@ class MeanPooledSpanEncoder(nn.Module):
     - Produces token embeddings (for feeding the global/latent transformer)
     - Enables deriving a single latent vector per span via mean pooling
     """
-    def __init__(self, config: Qwen2Config, span_dropout_prob: float = 0.0):
+    def __init__(self, config: Any, span_dropout_prob: float = 0.0):
         super().__init__()
         self.config = config
         self.token_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
@@ -196,84 +195,6 @@ class LocalCausalTransformer(nn.Module):
         return x
 
 
-class SDPAMultiheadCrossAttention(nn.Module):
-    """
-    Multihead cross-attention implemented via torch SDPA.
-
-    Key feature for memory: supports using a single K/V batch (Bk=1) while queries
-    are batched (Bq=N_nodes). We avoid [Bq, S, H] materialization by flattening
-    queries into a single sequence length (Lq=Bq*T) with batch=1.
-    """
-    def __init__(self, hidden_size: int, nhead: int, dropout: float = 0.0):
-        super().__init__()
-        if hidden_size % nhead != 0:
-            raise ValueError(f"hidden_size ({hidden_size}) must be divisible by nhead ({nhead})")
-        self.hidden_size = int(hidden_size)
-        self.nhead = int(nhead)
-        self.head_dim = int(hidden_size // nhead)
-        self.dropout = float(dropout)
-
-        self.q_proj = nn.Linear(hidden_size, hidden_size, bias=True)
-        self.k_proj = nn.Linear(hidden_size, hidden_size, bias=True)
-        self.v_proj = nn.Linear(hidden_size, hidden_size, bias=True)
-        self.out_proj = nn.Linear(hidden_size, hidden_size, bias=True)
-
-    def forward(
-        self,
-        x_q: torch.Tensor,                 # [Bq, T, H]
-        mem_kv: torch.Tensor,              # [Bk, S, H] (we expect Bk==1 for global memory)
-        key_padding_mask: Optional[torch.Tensor] = None,  # [Bk, S] True=mask/ignore
-    ) -> torch.Tensor:
-        if x_q.dim() != 3 or mem_kv.dim() != 3:
-            raise ValueError(f"Expected x_q/mem_kv to be 3D, got {x_q.shape=} {mem_kv.shape=}")
-        bq, t, h = x_q.shape
-        bk, s, hk = mem_kv.shape
-        if h != self.hidden_size or hk != self.hidden_size:
-            raise ValueError(f"Hidden size mismatch: {h=} {hk=} expected {self.hidden_size}")
-        if bk != 1:
-            # We only need the broadcastable case for the global memory optimization.
-            # If needed later, we can extend to bk==bq via chunking or a second path.
-            raise ValueError(f"SDPAMultiheadCrossAttention currently expects mem_kv batch=1, got {bk}")
-
-        # Project
-        q = self.q_proj(x_q)     # [Bq, T, H]
-        k = self.k_proj(mem_kv)  # [1, S, H]
-        v = self.v_proj(mem_kv)  # [1, S, H]
-
-        # Reshape to heads
-        q = q.view(bq, t, self.nhead, self.head_dim).permute(0, 2, 1, 3).contiguous()  # [Bq, nh, T, hd]
-        k = k.view(1, s, self.nhead, self.head_dim).permute(0, 2, 1, 3).contiguous()   # [1, nh, S, hd]
-        v = v.view(1, s, self.nhead, self.head_dim).permute(0, 2, 1, 3).contiguous()   # [1, nh, S, hd]
-
-        # Flatten queries: treat (Bq*T) as one long query sequence in batch=1
-        q_flat = q.reshape(1, self.nhead, bq * t, self.head_dim)  # [1, nh, Lq, hd]
-
-        attn_mask = None
-        if key_padding_mask is not None:
-            # key_padding_mask: [1, S] True=ignore. SDPA bool mask: True=masked.
-            if key_padding_mask.dim() != 2 or key_padding_mask.shape[0] != 1 or key_padding_mask.shape[1] != s:
-                raise ValueError(f"Expected key_padding_mask shape [1, S], got {key_padding_mask.shape}")
-            kpm = key_padding_mask.to(torch.bool)
-            # [1, 1, 1, S] -> expand to [1, 1, Lq, S] (no materialization)
-            attn_mask = kpm.view(1, 1, 1, s).expand(1, 1, bq * t, s)
-
-        dropout_p = self.dropout if self.training and self.dropout > 0 else 0.0
-        out = F.scaled_dot_product_attention(
-            q_flat,           # [1, nh, Lq, hd]
-            k,                # [1, nh, S, hd]
-            v,                # [1, nh, S, hd]
-            attn_mask=attn_mask,
-            dropout_p=dropout_p,
-            is_causal=False,
-        )  # [1, nh, Lq, hd]
-
-        # Reshape back to [Bq, T, H]
-        out = out.squeeze(0)  # [nh, Lq, hd]
-        out = out.view(self.nhead, bq, t, self.head_dim).permute(1, 2, 0, 3).contiguous()  # [Bq, T, nh, hd]
-        out = out.view(bq, t, self.hidden_size)  # [Bq, T, H]
-        return self.out_proj(out)
-
-
 class LocalHybridDecoderBlock(nn.Module):
     """
     Decoder block with:
@@ -292,10 +213,6 @@ class LocalHybridDecoderBlock(nn.Module):
         self.self_attn = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=nhead, dropout=dropout, batch_first=True)
 
         self.ln2 = nn.LayerNorm(hidden_size)
-        # Global cross-attention: SDPA path avoids materializing per-node global memory.
-        self.use_sdpa_global_attn: bool = True
-        self.cross_attn_global_sdpa = SDPAMultiheadCrossAttention(hidden_size, nhead, dropout=dropout)
-        # Fallback path (kept for safety/debug)
         self.cross_attn_global = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=nhead, dropout=dropout, batch_first=True)
 
         self.ln3 = nn.LayerNorm(hidden_size)
@@ -342,10 +259,7 @@ class LocalHybridDecoderBlock(nn.Module):
         # Cross-attention to global memory (if provided)
         xm = self.ln2(x)
         if global_memory is not None:
-            if self.use_sdpa_global_attn and global_memory.size(0) == 1:
-                ga_out = self.cross_attn_global_sdpa(xm, global_memory, key_padding_mask=global_key_padding_mask)
-            else:
-                ga_out, _ = self.cross_attn_global(xm, global_memory, global_memory, key_padding_mask=global_key_padding_mask)
+            ga_out, _ = self.cross_attn_global(xm, global_memory, global_memory, key_padding_mask=global_key_padding_mask)
             x = x + ga_out
 
         # Cross-attention to span memory (fallback to latent if memory is None)
@@ -411,26 +325,31 @@ class LocalHybridDecoder(nn.Module):
         return x
 
 
-class BLTAdapterModel(Qwen2ForCausalLM):
+class BLTAdapterModel(nn.Module):
     """
     BLT-style adapter:
       - Local encoder: mean-pooled span representations from per-token embeddings
-      - Global/latent transformer: Qwen2.5 Coder (frozen or partially unfrozen)
+      - Global/latent transformer: Any AutoModelForCausalLM (frozen or partially unfrozen)
       - Local decoder: small causal Transformer with cross-attention to span latent
     """
     def __init__(
         self,
-        config: Qwen2Config,
+        config: Any,
+        base_model: Optional[AutoModelForCausalLM] = None,
         local_num_layers: int = 2,
         local_dropout: float = 0.1,
         max_node_length: int = 64,
         boundary_loss_weight: float = 0.1,
         latent_mse_weight: float = 0.1,
         num_node_types: Optional[int] = None,
-        boundary_class_weight: Optional[torch.Tensor] = None,  # [2] tensor for class weights
-        boundary_focal_gamma: float = 0.0,  # Focal loss gamma (0.0 = disabled, 2.0 = standard)
     ):
-        super().__init__(config)
+        super().__init__()
+        
+        # Store config and base model via composition
+        self.config = config
+        if base_model is None:
+            raise ValueError("base_model must be provided to BLTAdapterModel")
+        self.base_model = base_model
 
         self.hidden_size = config.hidden_size
         self.vocab_size = config.vocab_size
@@ -438,25 +357,17 @@ class BLTAdapterModel(Qwen2ForCausalLM):
         self.boundary_loss_weight = float(boundary_loss_weight)
         self.latent_mse_weight = float(latent_mse_weight)
         # IMPORTANT: keep probe-head output dimension stable across save/load.
-        # When resuming via from_pretrained(), the constructor may be called without explicit num_node_types.
-        # In that case, read from config if present; otherwise fall back to the span-type vocab size.
+        # Prefer config.num_node_types if available when num_node_types is not provided.
         if num_node_types is None:
             try:
                 num_node_types = int(getattr(config, "num_node_types"))
             except Exception:
                 num_node_types = int(len(SPAN_TYPE_LIST))
         self.num_node_types = int(num_node_types)
-        # Persist into config so future checkpoints can resume without mismatched probe dims.
         try:
             self.config.num_node_types = int(self.num_node_types)
         except Exception:
             pass
-        # Class weighting for boundary head (to handle class imbalance)
-        if boundary_class_weight is not None:
-            self.register_buffer('boundary_class_weight', boundary_class_weight)
-        else:
-            self.boundary_class_weight = None
-        self.boundary_focal_gamma = float(boundary_focal_gamma)
         # Probe controls can be toggled externally (e.g., from train_main)
         self.probe_only: bool = False
         # Additional weights and temperatures (can be updated during training)
@@ -508,13 +419,13 @@ class BLTAdapterModel(Qwen2ForCausalLM):
         # Tie and freeze large vocab projections/embeddings to avoid duplicating VxH params
         try:
             # Tie local token embed to base token embeddings
-            self.local_token_embed.weight = self.model.embed_tokens.weight  # type: ignore[attr-defined]
+            self.local_token_embed.weight = self.base_model.model.embed_tokens.weight  # type: ignore[attr-defined]
             self.local_token_embed.weight.requires_grad = False
         except Exception:
             pass
         try:
             # Tie local output projection to base lm_head
-            self.local_out_proj.weight = self.lm_head.weight  # type: ignore[attr-defined]
+            self.local_out_proj.weight = self.base_model.lm_head.weight  # type: ignore[attr-defined]
             self.local_out_proj.weight.requires_grad = False
         except Exception:
             pass
@@ -566,9 +477,80 @@ class BLTAdapterModel(Qwen2ForCausalLM):
             nn.Sigmoid(),
         )
 
-    def copy_base_embeddings_from(self, base: Qwen2ForCausalLM) -> None:
+    @property
+    def device(self):
+        """Device property that delegates to base_model."""
+        return next(self.base_model.parameters()).device
+    
+    @property
+    def dtype(self):
+        """Dtype property that delegates to base_model."""
+        return next(self.base_model.parameters()).dtype
+
+    def save_pretrained(self, save_directory: str, **kwargs):
         """
-        Copy token embeddings from a base Qwen model into our node token encoder.
+        Save adapter-specific weights and config.
+        Base model path is stored in config for loading later.
+        """
+        import os
+        os.makedirs(save_directory, exist_ok=True)
+        
+        # Ensure base_model_path is in config
+        if not hasattr(self.config, 'base_model_path'):
+            # Try to get it from base_model if available
+            if hasattr(self.base_model, 'name_or_path'):
+                self.config.base_model_path = self.base_model.name_or_path
+            else:
+                # Fallback - should be set during creation
+                self.config.base_model_path = getattr(self.config, 'base_model_path', '')
+        
+        # Save config
+        try:
+            # Try to save config using PreTrainedConfig's save_pretrained if available
+            if hasattr(self.config, 'save_pretrained'):
+                self.config.save_pretrained(save_directory)
+            else:
+                # Fallback: save as JSON
+                import json
+                config_dict = {k: v for k, v in self.config.__dict__.items() if not k.startswith('_')}
+                with open(os.path.join(save_directory, "config.json"), "w") as f:
+                    json.dump(config_dict, f, indent=2)
+        except Exception as e:
+            print(f"[save_pretrained] Warning: Could not save config: {e}")
+        
+        # Save adapter-only state dict (exclude base_model weights)
+        adapter_state_dict = {}
+        base_model_param_names = {n for n, _ in self.base_model.named_parameters()}
+        base_model_buffer_names = {n for n, _ in self.base_model.named_buffers()}
+        
+        for name, param in self.named_parameters():
+            # Skip base_model parameters
+            if not name.startswith('base_model.') and name not in base_model_param_names:
+                adapter_state_dict[name] = param
+        
+        for name, buffer in self.named_buffers():
+            # Skip base_model buffers
+            if not name.startswith('base_model.') and name not in base_model_buffer_names:
+                adapter_state_dict[name] = buffer
+        
+        # Save state dict
+        safe_serialization = kwargs.get('safe_serialization', True)
+        
+        if safe_serialization:
+            try:
+                from safetensors.torch import save_file
+                from transformers.modeling_utils import SAFE_WEIGHTS_NAME
+                save_file(adapter_state_dict, os.path.join(save_directory, SAFE_WEIGHTS_NAME))
+            except Exception as e:
+                # Fallback to regular torch.save
+                print(f"[save_pretrained] Warning: Could not use safetensors: {e}, falling back to pytorch_model.bin")
+                torch.save(adapter_state_dict, os.path.join(save_directory, "pytorch_model.bin"))
+        else:
+            torch.save(adapter_state_dict, os.path.join(save_directory, "pytorch_model.bin"))
+
+    def copy_base_embeddings_from(self, base: AutoModelForCausalLM) -> None:
+        """
+        Copy token embeddings from a base model into our node token encoder.
         """
         with torch.no_grad():
             self.node_token_encoder.token_embeddings.weight.copy_(base.model.embed_tokens.weight)
@@ -582,13 +564,13 @@ class BLTAdapterModel(Qwen2ForCausalLM):
         **kwargs,
     ):
         """
-        Standard causal LM forward for the global transformer (Qwen2.5),
+        Standard causal LM forward for the global transformer,
         plus optional BLT-style local node reconstruction loss when labels+spans are provided.
         """
         # Compute token embeddings
         # - global_inputs_embeds: regular base embedding for the global transformer
         # - node_inputs_embeds: node token encoder outputs for span/node processing
-        global_inputs_embeds = self.model.embed_tokens(input_ids)  # [B, L, H]
+        global_inputs_embeds = self.base_model.model.embed_tokens(input_ids)  # [B, L, H]
         node_inputs_embeds = self.node_token_encoder(input_ids, span_metadata)  # [B, L, H]
 
         # Forward through global transformer using inputs_embeds
@@ -600,7 +582,7 @@ class BLTAdapterModel(Qwen2ForCausalLM):
         need_hidden_states = bool(span_metadata is not None and attention_mask is not None)
         # Respect caller request while ensuring we have hidden states when needed
         want_hidden_states = bool(kwargs.get('output_hidden_states', False) or need_hidden_states)
-        outputs = super().forward(
+        outputs = self.base_model.forward(
             input_ids=None,
             attention_mask=attention_mask,
             inputs_embeds=global_inputs_embeds,
@@ -609,17 +591,6 @@ class BLTAdapterModel(Qwen2ForCausalLM):
             return_dict=True,  # force dict to access fields reliably
             **filtered_kwargs,
         )
-
-        # Teacher-forced global argmax ids (for scheduled sampling of local-encoder span tokens)
-        # Kept detached: it is used as discrete conditioning, not a differentiable path.
-        global_argmax_ids = None
-        try:
-            if str(getattr(self, "span_ss_mode", "off")) != "off":
-                if hasattr(outputs, "logits") and outputs.logits is not None:
-                    global_argmax_ids = outputs.logits.argmax(dim=-1).detach()
-                    outputs.global_argmax_ids = global_argmax_ids
-        except Exception:
-            global_argmax_ids = None
 
         # Preserve raw LM cross-entropy before composing total loss
         total_loss = None
@@ -644,7 +615,7 @@ class BLTAdapterModel(Qwen2ForCausalLM):
                 last_hidden = outputs.hidden_states[-1]
             if last_hidden is None:
                 # As a safety fallback (should not happen when need_hidden_states=True), run the base model
-                base_out = self.model(
+                base_out = self.base_model.model(
                     input_ids=None,
                     attention_mask=attention_mask,
                     inputs_embeds=global_inputs_embeds,
@@ -673,43 +644,10 @@ class BLTAdapterModel(Qwen2ForCausalLM):
                 # Mask to valid positions
                 mask = attention_mask.to(torch.bool) if attention_mask is not None else torch.ones_like(boundary_targets, dtype=torch.bool, device=boundary_targets.device)
                 logits = self.boundary_head(last_hidden_for_heads)  # [B, L, 2]
-                
-                # Compute class weights if needed (handle class imbalance)
-                class_weight = None
-                if self.boundary_class_weight is not None:
-                    class_weight = self.boundary_class_weight.to(logits.device)
-                elif self.boundary_focal_gamma == 0.0:
-                    # Auto-compute class weights based on class frequency (inverse frequency weighting)
-                    # This helps when most tokens are non-boundaries
-                    with torch.no_grad():
-                        masked_targets = boundary_targets[mask].view(-1)
-                        if masked_targets.numel() > 0:
-                            num_non_boundary = (masked_targets == 0).sum().float()
-                            num_boundary = (masked_targets == 1).sum().float()
-                            total = num_non_boundary + num_boundary
-                            if num_boundary > 0 and num_non_boundary > 0:
-                                # Inverse frequency weighting: weight = total / (num_classes * class_count)
-                                weight_non_boundary = total / (2.0 * num_non_boundary)
-                                weight_boundary = total / (2.0 * num_boundary)
-                                class_weight = torch.tensor([weight_non_boundary, weight_boundary], device=logits.device, dtype=logits.dtype)
-                
-                # Compute loss with optional focal loss
-                if self.boundary_focal_gamma > 0.0:
-                    # Focal loss: focuses on hard examples
-                    logits_flat = logits[mask].view(-1, 2)
-                    targets_flat = boundary_targets[mask].view(-1)
-                    ce_loss_flat = F.cross_entropy(logits_flat, targets_flat, reduction='none', weight=class_weight)
-                    probs_flat = F.softmax(logits_flat, dim=-1)
-                    p_t = probs_flat.gather(1, targets_flat.unsqueeze(1)).squeeze(1)
-                    focal_weight = (1 - p_t) ** self.boundary_focal_gamma
-                    ce_loss = (focal_weight * ce_loss_flat).mean()
-                else:
-                    # Standard cross-entropy with optional class weighting
-                    ce_loss = F.cross_entropy(
-                        logits[mask].view(-1, 2),
-                        boundary_targets[mask].view(-1),
-                        weight=class_weight,
-                    )
+                ce_loss = F.cross_entropy(
+                    logits[mask].view(-1, 2),
+                    boundary_targets[mask].view(-1),
+                )
                 # Metrics for monitoring
                 try:
                     with torch.no_grad():
@@ -792,7 +730,6 @@ class BLTAdapterModel(Qwen2ForCausalLM):
                 span_metadata=span_metadata,
                 last_hidden_for_heads=last_hidden_for_heads,
                 attention_mask=attention_mask,
-                global_argmax_ids=global_argmax_ids,
             )
             if node_losses is not None:
                 node_recon_loss, aux = node_losses
@@ -830,11 +767,6 @@ class BLTAdapterModel(Qwen2ForCausalLM):
                         outputs.type_probe_decoder_loss = aux['type_probe_decoder_loss']
                     if 'type_probe_decoder_acc' in aux:
                         outputs.type_probe_decoder_acc = aux['type_probe_decoder_acc']
-                    # Scheduled sampling stats / monitoring
-                    if 'span_ss_model_frac' in aux:
-                        outputs.span_ss_model_frac = aux['span_ss_model_frac']
-                    if 'teacher_ce' in aux:
-                        outputs.teacher_ce = aux['teacher_ce']
                     # If probe-only, replace/compose total loss from probes
                     if getattr(self, "probe_only", False):
                         probe_total = None
@@ -940,7 +872,6 @@ class BLTAdapterModel(Qwen2ForCausalLM):
         span_metadata: Dict,
         last_hidden_for_heads: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        global_argmax_ids: Optional[torch.Tensor] = None,
     ) -> Optional[Tuple[torch.Tensor, Optional[Dict[str, torch.Tensor]]]]:
         """
         Teacher-forced next-token prediction (generation objective) using the local decoder.
@@ -953,10 +884,15 @@ class BLTAdapterModel(Qwen2ForCausalLM):
 
         node_input_seqs = []
         node_target_seqs = []
+        node_encoder_latents = []  # Raw encoder latents (for combining later)
+        node_pred_latents = []
         node_type_ids: List[int] = []
 
         total_nodes_kept = 0
 
+        # Also collect global hidden at span start for residual connection
+        node_global_hiddens: List[torch.Tensor] = []
+        
         # Track batch/position indices for gradient-enabled indexing later
         node_batch_indices: List[int] = []
         node_start_indices: List[int] = []
@@ -975,12 +911,12 @@ class BLTAdapterModel(Qwen2ForCausalLM):
                 idxs = sp['indices']
                 if len(idxs) == 0:
                     continue
-                # Truncate span indices to match reconstruction cap (bounds both compute and memory)
-                idxs = idxs[: min(len(idxs), int(self.max_node_length))]
                 token_seq = input_ids[b, torch.tensor(idxs, device=device)].detach()
                 L = int(token_seq.shape[0])
                 if L <= 0:
                     continue
+                # Encoder latent: mean-pooled input embeddings over span
+                encoder_latent = inputs_embeds[b, torch.tensor(idxs, device=inputs_embeds.device), :].mean(dim=0)
                 # store start index if available
                 start_idx = int(sp.get('start', int(torch.tensor(idxs, device=device).min().item())))
                 
@@ -1001,6 +937,7 @@ class BLTAdapterModel(Qwen2ForCausalLM):
 
                 node_input_seqs.append(inp)
                 node_target_seqs.append(target)
+                node_encoder_latents.append(encoder_latent.detach())  # Detached for now
                 node_batch_indices.append(b)
                 node_start_indices.append(start_idx)
                 node_span_indices.append(idxs)
@@ -1028,54 +965,16 @@ class BLTAdapterModel(Qwen2ForCausalLM):
             tgt_batch[i, :tgtL] = node_target_seqs[i]
             mask_batch[i, :tgtL] = True
         
-        # === Scheduled sampling for local-encoder span tokens (train/infer mismatch) ===
-        # Build span_memory and encoder_latents_batch from node_token_encoder(span_tokens),
-        # where span_tokens are either gold tokens or teacher-forced global argmax tokens.
-        pad_id = int(self.config.pad_token_id) if self.config.pad_token_id is not None else 0
-        ss_mode = str(getattr(self, "span_ss_mode", "off"))
-        p_gold = float(getattr(self, "span_ss_p_gold", 1.0))
-        use_model = torch.zeros((total_nodes_kept,), device=device, dtype=torch.bool)
-        if ss_mode != "off" and global_argmax_ids is not None:
-            # per-span scheduled sampling
-            use_model = torch.rand((total_nodes_kept,), device=device) > float(p_gold)
-
-        # Build padded span token ids for local encoder
-        span_len_list: List[int] = [len(idxs) for idxs in node_span_indices]
-        max_span_mem = max(span_len_list) if len(span_len_list) > 0 else 0
-        if max_span_mem <= 0:
-            return None
-
-        span_tokens_padded = torch.full(
-            (total_nodes_kept, max_span_mem),
-            fill_value=pad_id,
-            dtype=torch.long,
-            device=device,
-        )
-        span_kpm = torch.ones((total_nodes_kept, max_span_mem), device=device, dtype=torch.bool)  # True=mask/ignore
-
-        model_used_count = 0
+        # === BATCHED GRADIENT-ENABLED OPERATIONS ===
+        # Build encoder latents with gradient flow through inputs_embeds
+        encoder_latents_list = []
         for i in range(total_nodes_kept):
-            b = int(node_batch_indices[i])
+            b = node_batch_indices[i]
             idxs = node_span_indices[i]
-            sl = int(len(idxs))
-            if sl <= 0:
-                continue
-            idxs_t = torch.tensor(idxs, device=device, dtype=torch.long)
-            if bool(use_model[i]):
-                toks = global_argmax_ids[b, idxs_t]
-                model_used_count += 1
-            else:
-                toks = input_ids[b, idxs_t]
-            span_tokens_padded[i, :sl] = toks
-            span_kpm[i, :sl] = False
-
-        # Local encoder outputs for span memory: [N, S, H]
-        span_mem_batch = self.node_token_encoder(span_tokens_padded, None)
-
-        # Encoder latents: masked mean over non-pad positions: [N, H]
-        valid = (~span_kpm).unsqueeze(-1).to(span_mem_batch.dtype)  # [N,S,1]
-        denom = valid.sum(dim=1).clamp(min=1.0)  # [N,1]
-        encoder_latents_batch = (span_mem_batch * valid).sum(dim=1) / denom  # [N,H]
+            # Mean-pool with gradient flow
+            span_embeds = inputs_embeds[b, idxs, :]  # [span_len, H]
+            encoder_latents_list.append(span_embeds.mean(dim=0))  # [H]
+        encoder_latents_batch = torch.stack(encoder_latents_list, dim=0)  # [N, H]
         
         # Build global hiddens with gradient flow through last_hidden_for_heads
         global_hiddens_list = []
@@ -1101,138 +1000,77 @@ class BLTAdapterModel(Qwen2ForCausalLM):
         # Local decoder forward (cross-attn to span/global memories)
         tok_emb = self.local_token_embed(inp_batch)  # [N, L, H]
         teacher_span_latent = self.latent_proj(latents_batch).unsqueeze(1)  # [N, 1, H]
-        # span_mem_batch / span_kpm already built above from scheduled-sampled span tokens
 
-        # === Structural memory fix ===
-        # Do NOT replicate global memory per node as [N_nodes, L, H].
-        # Instead, group nodes by sample b and pass global_memory as [1, L, H] so
-        # SDPA global cross-attn can broadcast K/V without materializing [N_b, L, H].
-        attn_mask_bool = (
-            attention_mask.to(torch.bool)
-            if attention_mask is not None
-            else torch.ones((batch_size, seq_len), device=device, dtype=torch.bool)
-        )
-        by_b: List[List[int]] = [[] for _ in range(batch_size)]
-        for i, b in enumerate(node_batch_indices):
-            if 0 <= int(b) < batch_size:
-                by_b[int(b)].append(i)
+        # Build span memory batch (local encoder token-wise embeddings), padded
+        span_mem_list: List[torch.Tensor] = []
+        span_len_list: List[int] = []
+        for i in range(total_nodes_kept):
+            b = node_batch_indices[i]
+            idxs = node_span_indices[i]
+            span_embeds = inputs_embeds[b, idxs, :]  # [span_len, H]
+            span_mem_list.append(span_embeds)
+            span_len_list.append(int(span_embeds.size(0)))
+        max_span_mem = max(span_len_list) if len(span_len_list) > 0 else 0
+        if max_span_mem > 0:
+            span_mem_batch = torch.zeros((total_nodes_kept, max_span_mem, self.hidden_size), device=device, dtype=inputs_embeds.dtype)
+            span_kpm = torch.ones((total_nodes_kept, max_span_mem), device=device, dtype=torch.bool)  # True=mask/ignore
+            for i, mem in enumerate(span_mem_list):
+                sl = mem.size(0)
+                span_mem_batch[i, :sl, :] = mem
+                span_kpm[i, :sl] = False  # valid positions are unmasked
+        else:
+            span_mem_batch = None  # type: ignore[assignment]
+            span_kpm = None  # type: ignore[assignment]
 
-        # Assemble teacher outputs in the original node order to keep downstream probes unchanged
-        dec_out_teacher = torch.empty_like(tok_emb)  # [N, L, H]
+        # Build global memory batch (replicate sequence for each node)
+        if isinstance(last_hidden_for_heads, torch.Tensor):
+            global_mem_per_b = last_hidden_for_heads  # [B, L, H]
+            attn_mask_bool = attention_mask.to(torch.bool) if attention_mask is not None else torch.ones((batch_size, seq_len), device=device, dtype=torch.bool)
+            gmem_list = []
+            gkpm_list = []
+            for i in range(total_nodes_kept):
+                b = node_batch_indices[i]
+                gmem_list.append(global_mem_per_b[b:b+1, :, :])  # [1,L,H]
+                # key_padding_mask True to ignore positions => inverse of attention_mask
+                gkpm_list.append(~attn_mask_bool[b:b+1, :])  # [1,L]
+            global_mem_batch = torch.cat(gmem_list, dim=0) if len(gmem_list) > 0 else None  # [N,L,H]
+            global_kpm = torch.cat(gkpm_list, dim=0) if len(gkpm_list) > 0 else None       # [N,L]
+        else:
+            global_mem_batch = None
+            global_kpm = None
 
-        teacher_num = torch.zeros((), device=device, dtype=torch.float32)
-        teacher_den = torch.zeros((), device=device, dtype=torch.float32)
-
-        for b in range(batch_size):
-            idx_list = by_b[b]
-            if not idx_list:
-                continue
-            idx = torch.tensor(idx_list, device=device, dtype=torch.long)
-
-            tok_emb_b = tok_emb.index_select(0, idx)
-            teacher_latent_b = teacher_span_latent.index_select(0, idx)
-            span_mem_b = span_mem_batch.index_select(0, idx) if span_mem_batch is not None else None
-            span_kpm_b = span_kpm.index_select(0, idx) if span_kpm is not None else None
-
-            global_mem_b = last_hidden_for_heads[b:b+1, :, :] if isinstance(last_hidden_for_heads, torch.Tensor) else None  # [1,L,H]
-            global_kpm_b = (~attn_mask_bool[b:b+1, :]) if global_mem_b is not None else None  # [1,L]
-
-            dec_out_teacher_b = self.local_decoder(
-                tok_emb_b,
-                teacher_latent_b,
-                span_memory=span_mem_b,
-                span_key_padding_mask=span_kpm_b,
-                global_memory=global_mem_b,
-                global_key_padding_mask=global_kpm_b,
-            )  # [N_b, L, H]
-
-            # Residual (per-node)
-            if hasattr(self, 'global_residual_gate') and hasattr(self, 'global_residual_scale'):
-                global_hidden_b = global_hiddens_batch.index_select(0, idx)
-                global_hidden_expanded = global_hidden_b.unsqueeze(1).expand_as(dec_out_teacher_b)
-                gate_input = torch.cat([dec_out_teacher_b, global_hidden_expanded], dim=-1)
-                gate = self.global_residual_gate(gate_input)
-                dec_out_teacher_b = (1 - gate) * dec_out_teacher_b + gate * self.global_residual_scale * global_hidden_expanded
-
-            # Save into full tensor for downstream probes
-            dec_out_teacher.index_copy_(0, idx, dec_out_teacher_b)
+        dec_out_teacher = self.local_decoder(
+            tok_emb,
+            teacher_span_latent,
+            span_memory=span_mem_batch,
+            span_key_padding_mask=span_kpm,
+            global_memory=global_mem_batch,
+            global_key_padding_mask=global_kpm,
+        )  # [N, L, H]
         
-        def _linear_cross_entropy_chunked(
-            hidden: torch.Tensor,
-            out_proj: nn.Linear,
-            targets: torch.Tensor,
-            ignore_index: int = -100,
-            chunk_size: int = 4096,
-        ) -> torch.Tensor:
-            """
-            Memory-efficient CE for very large vocab projections.
-            Computes CE without materializing logits of shape [M, V].
-            - hidden: [..., H]
-            - out_proj: Linear(H -> V)
-            - targets: [...] (same leading shape), values in [0, V) or ignore_index
-            Returns: scalar loss (float32)
-            """
-            x = hidden.reshape(-1, hidden.size(-1))
-            t = targets.reshape(-1)
-            valid = (t != ignore_index)
-            if valid.sum().item() == 0:
-                return torch.zeros((), device=x.device, dtype=torch.float32)
-            x = x[valid]                      # [M, H]
-            t = t[valid].to(torch.long)       # [M]
-
-            weight = out_proj.weight          # [V, H]
-            bias = out_proj.bias              # [V] or None
-            vocab = int(weight.size(0))
-
-            # logsumexp over vocab in chunks, accumulated in float32 for stability
-            lse_total: Optional[torch.Tensor] = None
-            for start in range(0, vocab, int(chunk_size)):
-                end = min(vocab, start + int(chunk_size))
-                w = weight[start:end, :]  # [C, H]
-                # logits: [M, C]
-                logits = x @ w.t()
-                if bias is not None:
-                    logits = logits + bias[start:end]
-                lse_chunk = torch.logsumexp(logits.float(), dim=-1)  # [M]
-                lse_total = lse_chunk if lse_total is None else torch.logaddexp(lse_total, lse_chunk)
-
-            # target logit via indexed weight rows (no [M, V] allocation)
-            w_t = weight.index_select(0, t)  # [M, H]
-            target_logit = (x * w_t).sum(dim=-1)  # [M]
-            if bias is not None:
-                target_logit = target_logit + bias.index_select(0, t)
-
-            loss_vec = lse_total - target_logit.float()
-            return loss_vec.mean()
-
-        # Targets with ignore_index outside mask
-        targets_full = torch.where(
-            mask_batch,
-            tgt_batch,
-            torch.full_like(tgt_batch, -100),
+        # === NEW: Add residual from global hidden (for single-token shortcut) ===
+        if hasattr(self, 'global_residual_gate') and hasattr(self, 'global_residual_scale'):
+            # Expand global hidden to match sequence length: [N, H] -> [N, L, H]
+            global_hidden_expanded = global_hiddens_batch.unsqueeze(1).expand_as(dec_out_teacher)
+            
+            # Compute gate: how much to blend global vs local
+            # Gate input: concat of local decoder output and global hidden
+            gate_input = torch.cat([dec_out_teacher, global_hidden_expanded], dim=-1)  # [N, L, 2H]
+            gate = self.global_residual_gate(gate_input)  # [N, L, 1]
+            
+            # Blend: gate * global + (1-gate) * local
+            # When gate -> 1: output is dominated by global (good for single-token)
+            # When gate -> 0: output is dominated by local decoder (good for multi-token)
+            dec_out_teacher = (1 - gate) * dec_out_teacher + gate * self.global_residual_scale * global_hidden_expanded
+        
+        logits_teacher = self.local_out_proj(dec_out_teacher)  # [N, L, V]
+        vocab = logits_teacher.size(-1)
+        # Teacher CE for monitoring only
+        teacher_ce = F.cross_entropy(
+            logits_teacher.view(-1, vocab),
+            torch.where(mask_batch.view(-1), tgt_batch.view(-1), torch.full_like(tgt_batch.view(-1), -100)),
+            ignore_index=-100
         )
-        # Teacher CE for monitoring only (no giant logits allocation), aggregated across groups
-        for b in range(batch_size):
-            idx_list = by_b[b]
-            if not idx_list:
-                continue
-            idx = torch.tensor(idx_list, device=device, dtype=torch.long)
-            dec_t = dec_out_teacher.index_select(0, idx)
-            tgt_t = targets_full.index_select(0, idx)
-            valid = (tgt_t.reshape(-1) != -100)
-            denom = valid.sum().float()
-            if denom.item() <= 0:
-                continue
-            ce = _linear_cross_entropy_chunked(
-                dec_t,
-                self.local_out_proj,
-                tgt_t,
-                ignore_index=-100,
-                chunk_size=int(getattr(self, "ce_chunk_size", 4096)),
-            )
-            teacher_num = teacher_num + ce.float() * denom
-            teacher_den = teacher_den + denom
-        teacher_ce = teacher_num / torch.clamp(teacher_den, min=1.0)
 
         aux_losses: Dict[str, torch.Tensor] = {}
         # Student path: predicted latent via last_hidden_for_heads (if available)
@@ -1241,72 +1079,36 @@ class BLTAdapterModel(Qwen2ForCausalLM):
         infonce_weight = float(getattr(self, 'infonce_weight', 0.0))
         if isinstance(last_hidden_for_heads, torch.Tensor):
             # Use predicted span latents derived from global hidden state at span starts
-            recon_num = torch.zeros((), device=device, dtype=torch.float32)
-            recon_den = torch.zeros((), device=device, dtype=torch.float32)
-            # Only materialize full student outputs if KL is enabled (it needs full logits).
-            dec_out_student_full = torch.empty_like(tok_emb) if float(getattr(self, "kl_weight", 0.0)) > 0.0 else None
-
-            for b in range(batch_size):
-                idx_list = by_b[b]
-                if not idx_list:
-                    continue
-                idx = torch.tensor(idx_list, device=device, dtype=torch.long)
-
-                tok_emb_b = tok_emb.index_select(0, idx)
-                pred_lat_b = pred_latents_batch.index_select(0, idx)
-                student_latent_b = self.latent_proj(pred_lat_b).unsqueeze(1)  # [N_b,1,H]
-                span_mem_b = span_mem_batch.index_select(0, idx) if span_mem_batch is not None else None
-                span_kpm_b = span_kpm.index_select(0, idx) if span_kpm is not None else None
-
-                global_mem_b = last_hidden_for_heads[b:b+1, :, :]  # [1,L,H]
-                global_kpm_b = (~attn_mask_bool[b:b+1, :])          # [1,L]
-
-                dec_out_student_b = self.local_decoder(
-                    tok_emb_b,
-                    student_latent_b,
-                    span_memory=span_mem_b,
-                    span_key_padding_mask=span_kpm_b,
-                    global_memory=global_mem_b,
-                    global_key_padding_mask=global_kpm_b,
-                )  # [N_b,L,H]
-
-                # Residual (per-node)
-                if hasattr(self, 'global_residual_gate') and hasattr(self, 'global_residual_scale'):
-                    global_hidden_b = global_hiddens_batch.index_select(0, idx)
-                    global_hidden_expanded = global_hidden_b.unsqueeze(1).expand_as(dec_out_student_b)
-                    gate_input = torch.cat([dec_out_student_b, global_hidden_expanded], dim=-1)
-                    gate = self.global_residual_gate(gate_input)
-                    dec_out_student_b = (1 - gate) * dec_out_student_b + gate * self.global_residual_scale * global_hidden_expanded
-
-                if dec_out_student_full is not None:
-                    dec_out_student_full.index_copy_(0, idx, dec_out_student_b)
-
-                tgt_b = targets_full.index_select(0, idx)
-                valid = (tgt_b.reshape(-1) != -100)
-                denom = valid.sum().float()
-                if denom.item() <= 0:
-                    continue
-                ce = _linear_cross_entropy_chunked(
-                    dec_out_student_b,
-                    self.local_out_proj,
-                    tgt_b,
-                    ignore_index=-100,
-                    chunk_size=int(getattr(self, "ce_chunk_size", 4096)),
-                )
-                recon_num = recon_num + ce.float() * denom
-                recon_den = recon_den + denom
-
-            recon_loss = recon_num / torch.clamp(recon_den, min=1.0)
+            student_span_latent = self.latent_proj(pred_latents_batch).unsqueeze(1)  # [N,1,H]
+            dec_out_student = self.local_decoder(
+                tok_emb,
+                student_span_latent,
+                span_memory=span_mem_batch,
+                span_key_padding_mask=span_kpm,
+                global_memory=global_mem_batch,
+                global_key_padding_mask=global_kpm,
+            )  # [N,L,H]
+            
+            # Apply same residual connection for student path
+            if hasattr(self, 'global_residual_gate') and hasattr(self, 'global_residual_scale'):
+                global_hidden_expanded = global_hiddens_batch.unsqueeze(1).expand_as(dec_out_student)
+                gate_input = torch.cat([dec_out_student, global_hidden_expanded], dim=-1)
+                gate = self.global_residual_gate(gate_input)
+                dec_out_student = (1 - gate) * dec_out_student + gate * self.global_residual_scale * global_hidden_expanded
+            
+            logits_student = self.local_out_proj(dec_out_student)  # [N,L,V]
+            # Next-token CE from predicted latent (PRIMARY training loss)
+            gen_ce = F.cross_entropy(
+                logits_student.view(-1, vocab),
+                torch.where(mask_batch.view(-1), tgt_batch.view(-1), torch.full_like(tgt_batch.view(-1), -100)),
+                ignore_index=-100
+            )
+            recon_loss = gen_ce
             # KL between student and teacher on valid positions
             if kl_weight > 0:
                 try:
-                    # Warning: KL requires full vocab distributions and can be very memory heavy.
-                    if dec_out_student_full is None:
-                        raise RuntimeError("KL requested but dec_out_student_full was not materialized")
-                    logits_student = self.local_out_proj(dec_out_student_full)  # [N,L,V]
-                    logits_teacher = self.local_out_proj(dec_out_teacher).detach()  # [N,L,V]
                     log_p_student = F.log_softmax(logits_student[mask_batch], dim=-1)
-                    p_teacher = F.softmax(logits_teacher[mask_batch], dim=-1)
+                    p_teacher = F.softmax(logits_teacher[mask_batch].detach(), dim=-1)
                     kl = F.kl_div(log_p_student, p_teacher, reduction='batchmean')
                     aux_losses['kl_loss'] = kl
                 except Exception:
@@ -1362,16 +1164,6 @@ class BLTAdapterModel(Qwen2ForCausalLM):
                     aux_losses['type_probe_decoder_acc'] = dec_acc
         except Exception:
             # Do not fail training if probes encounter shape/label issues
-            pass
-
-        # Scheduled sampling stats (for logging)
-        try:
-            aux_losses['span_ss_model_frac'] = torch.tensor(
-                float(model_used_count) / float(max(1, total_nodes_kept)),
-                device=device,
-                dtype=torch.float32,
-            )
-        except Exception:
             pass
 
         # Expose teacher CE for monitoring
@@ -1503,6 +1295,84 @@ class BLTAdapterModel(Qwen2ForCausalLM):
         new_tokens = tokens[1 + prefix_len:]
         return torch.tensor(new_tokens, device=device, dtype=torch.long)
 
+    @classmethod
+    def from_pretrained(
+        cls,
+        pretrained_model_name_or_path: str,
+        *model_args,
+        **kwargs
+    ) -> "BLTAdapterModel":
+        """
+        Load BLTAdapterModel from a checkpoint.
+        
+        The checkpoint should contain:
+        - config.json with base_model_path
+        - pytorch_model.bin or model.safetensors with adapter weights
+        """
+        import os
+        
+        # Load config
+        config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True)
+        
+        # Get base model path from config or use default
+        base_model_path = getattr(config, 'base_model_path', pretrained_model_name_or_path)
+        
+        # Load base model
+        base_model = AutoModelForCausalLM.from_pretrained(
+            base_model_path, 
+            trust_remote_code=True,
+            *model_args,
+            **{k: v for k, v in kwargs.items() if k not in ['local_num_layers', 'local_dropout', 'max_node_length', 'num_node_types']}
+        )
+        
+        # Create adapter instance
+        adapter = cls(
+            config=config,
+            base_model=base_model,
+            local_num_layers=getattr(config, 'local_num_layers', kwargs.get('local_num_layers', 2)),
+            local_dropout=getattr(config, 'local_dropout', kwargs.get('local_dropout', 0.1)),
+            max_node_length=getattr(config, 'max_node_length', kwargs.get('max_node_length', 64)),
+            num_node_types=getattr(config, 'num_node_types', kwargs.get('num_node_types', 128)),
+        )
+        
+        # Load adapter weights
+        try:
+            state_dict_path = None
+            if os.path.isfile(os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")):
+                state_dict_path = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
+                adapter_state_dict = torch.load(state_dict_path, map_location="cpu")
+            elif os.path.isfile(os.path.join(pretrained_model_name_or_path, "model.safetensors")):
+                from safetensors.torch import load_file
+                state_dict_path = os.path.join(pretrained_model_name_or_path, "model.safetensors")
+                adapter_state_dict = load_file(state_dict_path)
+            else:
+                print(f"[from_pretrained] Warning: Could not find pytorch_model.bin or model.safetensors in {pretrained_model_name_or_path}")
+                return adapter
+            
+            # Filter out base_model weights - only load adapter-specific weights
+            adapter_only_state_dict = {}
+            base_model_param_names = {n for n, _ in base_model.named_parameters()}
+            base_model_buffer_names = {n for n, _ in base_model.named_buffers()}
+            
+            for k, v in adapter_state_dict.items():
+                # Skip base_model weights - they're already loaded
+                if not k.startswith('base_model.') and k not in base_model_param_names and k not in base_model_buffer_names:
+                    adapter_only_state_dict[k] = v
+            
+            if len(adapter_only_state_dict) > 0:
+                missing_keys, unexpected_keys = adapter.load_state_dict(adapter_only_state_dict, strict=False)
+                if missing_keys:
+                    print(f"[from_pretrained] Missing keys (expected for adapter): {len(missing_keys)} keys")
+                if unexpected_keys:
+                    print(f"[from_pretrained] Unexpected keys: {len(unexpected_keys)} keys")
+            else:
+                print(f"[from_pretrained] Warning: No adapter-specific weights found in checkpoint")
+        except Exception as e:
+            print(f"[from_pretrained] Warning: Could not load adapter weights: {e}")
+            print("[from_pretrained] Returning adapter with base model only")
+        
+        return adapter
+
 
 def create_blt_adapter_model(
     model_path: str = "/data/home/zhangsj/AST_decoding",
@@ -1510,23 +1380,25 @@ def create_blt_adapter_model(
     local_dropout: float = 0.1,
     max_node_length: int = 64,
     num_node_types: Optional[int] = None,
-    boundary_class_weight: Optional[torch.Tensor] = None,
-    boundary_focal_gamma: float = 0.0,
 ) -> BLTAdapterModel:
     """
-    Load Qwen2.5 Coder 1.5B from model_path, wrap with BLTAdapterModel,
+    Load any AutoModelForCausalLM from model_path, wrap with BLTAdapterModel,
     and copy base embeddings to the local encoder.
     """
-    base_model = AutoModelForCausalLM.from_pretrained(model_path)
+    base_model = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True)
     config = base_model.config
+    
+    # Store base model path in config for checkpoint saving
+    if not hasattr(config, 'base_model_path'):
+        config.base_model_path = model_path
+    
     adapter = BLTAdapterModel(
         config,
+        base_model=base_model,
         local_num_layers=local_num_layers,
         local_dropout=local_dropout,
         max_node_length=max_node_length,
-        num_node_types=num_node_types,
-        boundary_class_weight=boundary_class_weight,
-        boundary_focal_gamma=boundary_focal_gamma,
+        num_node_types=num_node_types
     )
     # Persist num_node_types into config.json for robust from_pretrained() resume.
     try:
@@ -1534,28 +1406,10 @@ def create_blt_adapter_model(
     except Exception:
         pass
 
-    # Copy transformer weights (except embeddings which we handle separately)
-    print("Copying transformer weights into adapter...")
-    copied = 0
-    for name, param in base_model.named_parameters():
-            if name in adapter.state_dict():
-                with torch.no_grad():
-                    adapter.state_dict()[name].copy_(param)
-                    copied += 1
-            else:
-                # Non-fatal; adapter has additional modules
-                pass
-
     # Copy token embeddings to node token encoder
-    adapter.copy_base_embeddings_from(base_model)  # type: ignore[arg-type]
+    adapter.copy_base_embeddings_from(base_model)
 
-    # Also tie lm_head if shapes match
-    if "lm_head.weight" in base_model.state_dict() and "lm_head.weight" in adapter.state_dict():
-        with torch.no_grad():
-            adapter.state_dict()["lm_head.weight"].copy_(base_model.state_dict()["lm_head.weight"])
-            print("Copied lm_head.weight")
-
-    print(f"Copied {copied} parameters from base into adapter.")
+    print(f"Created BLTAdapterModel with base model from {model_path}")
     return adapter
 
 

@@ -1,0 +1,8 @@
+{
+  "model": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+  "dataset": "mbpp",
+  "total_cost": 0.11580908999999993,
+  "total_tokens_in": 22115,
+  "total_tokens_out": 199682,
+  "num_tasks": 378
+}

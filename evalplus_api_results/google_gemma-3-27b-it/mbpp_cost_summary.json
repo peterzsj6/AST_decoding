@@ -1,0 +1,8 @@
+{
+  "model": "google/gemma-3-27b-it",
+  "dataset": "mbpp",
+  "total_cost": 0.011061650000000004,
+  "total_tokens_in": 23853,
+  "total_tokens_out": 55718,
+  "num_tasks": 378
+}
