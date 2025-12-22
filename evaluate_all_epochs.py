@@ -41,7 +41,7 @@ def run_evaluation(
     checkpoint_path: str,
     model_path: str,
     output_dir: str,
-    gpu: int = 7,
+    gpu: int = 0,
     dataset: str = "humaneval",
     **kwargs
 ) -> str:
@@ -65,6 +65,10 @@ def run_evaluation(
         "--output", output_path,
         "--overwrite",
     ]
+
+    # Force global-transformer-only evaluation for consistent baseline scoring.
+    # In run_evalplus_blt.py this also forces patcher="none".
+    cmd.append("--disable_local_decoder")
     
     # Add any additional kwargs
     for key, value in kwargs.items():
@@ -134,12 +138,14 @@ def main():
                        help="Output directory for evaluation results")
     parser.add_argument("--output_jsonl", type=str, default="",
                        help="Output JSONL file path (default: checkpoint_dir/epoch_results.jsonl)")
-    parser.add_argument("--gpu", type=int, default=7, help="GPU device ID")
+    parser.add_argument("--gpu", type=int, default=0, help="GPU device ID (sets CUDA_VISIBLE_DEVICES)")
     parser.add_argument("--dataset", type=str, default="humaneval", choices=["humaneval", "mbpp"])
     parser.add_argument("--skip_existing", action="store_true",
                        help="Skip epochs that already have results")
     
     # Pass through arguments for run_evalplus_blt.py
+    # NOTE: We always add --disable_local_decoder in run_evaluation() above.
+    # These patcher-related options are ignored in that mode (run_evalplus_blt forces patcher='none').
     parser.add_argument("--patcher", type=str, default="learned",
                        choices=["none", "heuristic", "entropy", "learned"])
     parser.add_argument("--boundary_threshold", type=float, default=0.65)

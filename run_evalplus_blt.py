@@ -3,6 +3,9 @@
 Run EvalPlus benchmarks (HumanEval+/MBPP+) using BLT adapter inference.
 Includes timestamp-based output directories and all inference hyperparameters.
 Supports base model evaluation by disabling local decoder/encoder.
+
+Also supports evaluating a plain HuggingFace base model (no BLT wrapper) via the
+vendored EvalPlus HF provider by using `--backend hf`.
 """
 
 import os
@@ -24,7 +27,7 @@ for i, arg in enumerate(sys.argv[1:], 1):
 if _gpu_arg is not None:
     os.environ["CUDA_VISIBLE_DEVICES"] = _gpu_arg
 elif "CUDA_VISIBLE_DEVICES" not in os.environ:
-    os.environ["CUDA_VISIBLE_DEVICES"] = "6"  # Default to GPU 7
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Default to GPU 7
 
 import argparse
 import json
@@ -37,10 +40,24 @@ PROJECT_ROOT = "/data/home/zhangsj"
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-# Make local EvalPlus repo importable (uninstalled source tree)
-EVALPLUS_SRC = "/data/home/zhangsj/qwen_coder_1.5b/evalplus/evalplus"
-if EVALPLUS_SRC not in sys.path:
-    sys.path.insert(0, EVALPLUS_SRC)
+# Make local EvalPlus repo importable (uninstalled source tree).
+# Prefer the vendored copy inside this repo (contains local patches / bugfixes),
+# fallback to the older external path if needed.
+EVALPLUS_SRC_VENDOR = "/data/home/zhangsj/AST_decoding/evalplus/evalplus"
+EVALPLUS_PARENT_VENDOR = "/data/home/zhangsj/AST_decoding/evalplus"
+EVALPLUS_SRC_FALLBACK = "/data/home/zhangsj/qwen_coder_1.5b/evalplus/evalplus"
+EVALPLUS_PARENT_FALLBACK = "/data/home/zhangsj/qwen_coder_1.5b/evalplus"
+
+if os.path.isdir(EVALPLUS_SRC_VENDOR):
+    if EVALPLUS_SRC_VENDOR not in sys.path:
+        sys.path.insert(0, EVALPLUS_SRC_VENDOR)
+    if EVALPLUS_PARENT_VENDOR not in sys.path:
+        sys.path.insert(0, EVALPLUS_PARENT_VENDOR)
+else:
+    if EVALPLUS_SRC_FALLBACK not in sys.path:
+        sys.path.insert(0, EVALPLUS_SRC_FALLBACK)
+    if EVALPLUS_PARENT_FALLBACK not in sys.path:
+        sys.path.insert(0, EVALPLUS_PARENT_FALLBACK)
 
 import torch
 
@@ -77,6 +94,9 @@ def generate_solutions_for_tasks(
     no_repeat_ngram_size: int = 0,
     disable_patching_in_docstring: bool = True,
     use_local_decoder: bool = True,
+    local_decoder_mode: str = "refine",
+    disable_local_encoder_only: bool = False,
+    min_rewrite_span_len: int = 8,
     sanitize_code: bool = True,
     collect_stats: bool = True,
 ) -> tuple[List[Dict[str, str]], Dict[str, Any]]:
@@ -116,14 +136,18 @@ def generate_solutions_for_tasks(
                 no_repeat_ngram_size=no_repeat_ngram_size,
                 disable_patching_in_docstring=disable_patching_in_docstring,
                 use_local_decoder=use_local_decoder,
+                local_decoder_mode=str(local_decoder_mode),
+                disable_local_encoder_only=disable_local_encoder_only,
+                min_rewrite_span_len=int(min_rewrite_span_len),
                 collect_stats=collect_stats,
             )
             
             # Handle return value (string or tuple with stats)
             if isinstance(result, tuple):
                 generated_full, stats = result
-                fired_boundaries = stats.get("fired_boundaries", 0)
-                tokens = stats.get("total_tokens", 0)
+                fired_boundaries = int(stats.get("fired_boundaries", 0) or 0)
+                tokens = int(stats.get("total_tokens", 0) or 0)
+                boundary_rate = float(stats.get("boundary_rate", (fired_boundaries / tokens if tokens > 0 else 0.0)) or 0.0)
                 total_fired_boundaries += fired_boundaries
                 total_tokens += tokens
                 boundary_stats_per_task.append({
@@ -131,11 +155,14 @@ def generate_solutions_for_tasks(
                     "sample": sample_idx,
                     "fired_boundaries": fired_boundaries,
                     "total_tokens": tokens,
+                    "boundary_rate": boundary_rate,
                 })
             else:
                 generated_full = result
                 fired_boundaries = 0
                 tokens = 0
+                boundary_rate = 0.0
+                stats = {}
             
             # Sanitize the generated code if requested
             if sanitize_code:
@@ -149,9 +176,35 @@ def generate_solutions_for_tasks(
                 solution_to_store = generated_full
             
             # Store as full solution to avoid any mismatch with prompt concatenation downstream
-            samples.append({"task_id": task_id, "solution": solution_to_store})
+            samples.append({
+                "task_id": task_id,
+                "solution": solution_to_store,
+                # Per-task boundary stats for analysis (same as raw file)
+                "fired_boundaries": int(fired_boundaries),
+                "total_tokens": int(tokens),
+                "boundary_rate": float(boundary_rate),
+                # Per-boundary trigger tokens (from incremental_generate stats)
+                "boundary_trigger_tokens": stats.get("boundary_trigger_tokens", []),
+                "boundary_trigger_token_ids": stats.get("boundary_trigger_token_ids", []),
+                "boundary_trigger_confidences": stats.get("boundary_trigger_confidences", []),
+                # Full boundary event objects (position, token, confidence, etc.)
+                "boundary_events": stats.get("boundary_events", []),
+            })
             # Always store raw output (pre-sanitization) for debugging
-            raw_samples.append({"task_id": task_id, "solution": generated_full})
+            raw_samples.append({
+                "task_id": task_id,
+                "solution": generated_full,
+                # Per-task boundary stats for analysis
+                "fired_boundaries": int(fired_boundaries),
+                "total_tokens": int(tokens),
+                "boundary_rate": float(boundary_rate),
+                # Per-boundary trigger tokens (from incremental_generate stats)
+                "boundary_trigger_tokens": stats.get("boundary_trigger_tokens", []),
+                "boundary_trigger_token_ids": stats.get("boundary_trigger_token_ids", []),
+                "boundary_trigger_confidences": stats.get("boundary_trigger_confidences", []),
+                # Full boundary event objects (position, token, confidence, etc.)
+                "boundary_events": stats.get("boundary_events", []),
+            })
             total_tasks += 1
     
     # Aggregate statistics
@@ -170,6 +223,13 @@ def generate_solutions_for_tasks(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run EvalPlus on BLT adapter model")
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="blt",
+        choices=["blt", "hf"],
+        help="Inference backend: 'blt' uses BLTAdapterModel wrapper; 'hf' evaluates a plain HF base model (no BLT wrapper).",
+    )
     # Model loading
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to saved adapter checkpoint (epoch folder) or base model path")
     parser.add_argument("--model_path", type=str, default="/data/home/zhangsj/AST_decoding", help="Base Qwen2.5 path")
@@ -192,12 +252,36 @@ def parse_args() -> argparse.Namespace:
     # BLT-specific inference hyperparameters
     parser.add_argument("--patcher", type=str, default="learned", choices=["none", "heuristic", "entropy", "learned"],
                        help="Patch strategy. 'none' disables all patching (base model only).")
-    parser.add_argument("--boundary_threshold", type=float, default=0.2, help="Threshold for boundary head predictions")
+    parser.add_argument("--boundary_threshold", type=float, default=0.5, help="Threshold for boundary head predictions")
     parser.add_argument("--min_steps_between_patches", type=int, default=4, help="Minimum steps between boundary patches")
     parser.add_argument("--max_patch_len", type=int, default=128, help="Maximum span length to rewrite")
     parser.add_argument("--disable_patching_in_docstring", action="store_true", default=True, help="Prevent patching in docstrings/comments")
+    parser.add_argument(
+        "--enable_patching_in_docstring",
+        action="store_false",
+        dest="disable_patching_in_docstring",
+        help="Allow patching even inside docstrings/comments (NOT recommended)",
+    )
     parser.add_argument("--use_local_decoder", action="store_true", default=True, help="Enable local decoder refinement")
+    parser.add_argument(
+        "--local_decoder_mode",
+        type=str,
+        default="refine",
+        choices=["generate", "refine"],
+        help="Local decoder behavior for span rewrite: 'refine' (teacher-forced denoise) or 'generate' (free-run from BOS).",
+    )
     parser.add_argument("--disable_local_decoder", action="store_true", help="Disable local decoder/encoder (use only global transformer, for base model evaluation)")
+    parser.add_argument(
+        "--disable_local_encoder_only",
+        action="store_true",
+        help="Keep local decoder enabled but skip local encoder (span_memory=None). This aligns inference with the training student path (latent_from_global + global memory).",
+    )
+    parser.add_argument(
+        "--min_rewrite_span_len",
+        type=int,
+        default=8,
+        help="Minimum span length to actually apply a rewrite in inference. Boundaries can still trigger and finalize shorter spans, but no rewrite is applied.",
+    )
     
     # Sampling hyperparameters
     parser.add_argument("--temperature", type=float, default=0.0, help=">0 enables stochastic sampling")
@@ -222,6 +306,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=str, default="", help="Output file path (if not provided, uses timestamp-based path)")
     parser.add_argument("--output_dir", type=str, default="/data/home/zhangsj/evalplus_results", help="Base output directory")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output files")
+
+    # HF backend-only knobs
+    parser.add_argument(
+        "--force_base_prompt",
+        action="store_true",
+        help="HF backend only: force direct completion prompt (ignore chat template). Recommended for base models.",
+    )
+    parser.add_argument(
+        "--attn_implementation",
+        type=str,
+        default="eager",
+        choices=["eager", "sdpa", "flash_attention_2"],
+        help="HF backend only: attention implementation passed to Transformers.",
+    )
     return parser.parse_args()
 
 
@@ -294,18 +392,6 @@ def main():
     if device == "cuda" and torch.cuda.is_available():
         print(f"PyTorch sees {torch.cuda.device_count()} GPU(s), using GPU 0 (which corresponds to the GPU specified in CUDA_VISIBLE_DEVICES)")
 
-    print(f"Loading model from checkpoint: {args.checkpoint}")
-    print(f"[DEBUG] Checkpoint path (normalized): {os.path.normpath(args.checkpoint)}")
-    print(f"[DEBUG] Checkpoint exists: {os.path.exists(args.checkpoint)}")
-    adapter, tokenizer = load_adapter_and_tokenizer(
-        checkpoint_path=args.checkpoint,
-        model_path=args.model_path,
-        device=device,
-        dtype=dtype,
-        peft_adapter=args.peft_adapter if args.peft_adapter else None,
-    )
-    print(f"[DEBUG] Model loaded successfully from: {args.checkpoint}")
-
     # Load dataset problems
     print(f"Loading {args.dataset} dataset...")
     if args.dataset == "humaneval":
@@ -327,83 +413,158 @@ def main():
         problems = {k: problems[k] for k in keep}
         print(f"[DEBUG] task_limit={args.task_limit} enabled: evaluating {len(problems)} task(s): {keep}")
 
-    print(f"Generating solutions for {len(problems)} tasks...")
-    print(f"Inference hyperparameters:")
-    print(f"  - patcher: {patcher}")
-    print(f"  - use_local_decoder: {use_local_decoder}")
-    if patcher == "learned":
-        print(f"  - boundary_threshold: {args.boundary_threshold}")
-        print(f"  - min_steps_between_patches: {args.min_steps_between_patches}")
-        print(f"  - max_patch_len: {args.max_patch_len}")
-    print(f"  - disable_patching_in_docstring: {args.disable_patching_in_docstring}")
-    print(f"  - temperature: {args.temperature}")
-    print(f"  - top_p: {args.top_p}")
-    print(f"  - repetition_penalty: {args.repetition_penalty}")
-    print(f"  - no_repeat_ngram_size: {args.no_repeat_ngram_size}")
-    print(f"  - sanitize_code: {not args.no_sanitize}")
+    # === Backend selection ===
+    if args.backend == "hf":
+        # Plain HF base model evaluation (no BLT wrapper).
+        # This is useful to validate the evaluation pipeline on models like Qwen3, even if BLTAdapterModel
+        # does not match the base architecture.
+        from evalplus.codegen import codegen as evalplus_codegen  # type: ignore
+        from evalplus.provider.hf import HuggingFaceDecoder  # type: ignore
 
-    # Generate solutions
-    samples, raw_samples, stats = generate_solutions_for_tasks(
-        model=adapter,
-        tokenizer=tokenizer,
-        problems=problems,
-        n_samples=args.n_samples,
-        max_new_tokens=args.max_new_tokens,
-        patcher=patcher,
-        boundary_threshold=args.boundary_threshold,
-        min_steps_between_patches=args.min_steps_between_patches,
-        max_patch_len=args.max_patch_len,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        repetition_penalty=args.repetition_penalty,
-        no_repeat_ngram_size=args.no_repeat_ngram_size,
-        disable_patching_in_docstring=args.disable_patching_in_docstring,
-        use_local_decoder=use_local_decoder,
-        sanitize_code=not args.no_sanitize,
-        collect_stats=True,
-    )
+        hf_dtype = "bfloat16"
+        if args.dtype in ["auto", "bf16"]:
+            hf_dtype = "bfloat16"
+        elif args.dtype == "fp16":
+            hf_dtype = "float16"
+        elif args.dtype == "fp32":
+            hf_dtype = "float32"
 
-    # Print boundary firing statistics
-    print(f"\n{'='*80}")
-    print("Boundary Firing Statistics")
-    print(f"{'='*80}")
-    print(f"Total tasks evaluated: {stats['total_tasks']}")
-    print(f"Total samples generated: {stats['total_samples']}")
-    print(f"Total boundaries fired: {stats['total_fired_boundaries']}")
-    print(f"Total tokens generated: {stats['total_tokens']}")
-    print(f"Average boundaries per task: {stats['avg_boundaries_per_task']:.2f}")
-    print(f"Average boundaries per token: {stats['avg_boundaries_per_token']:.4f}")
-    if stats['total_tokens'] > 0:
-        boundary_rate = (stats['total_fired_boundaries'] / stats['total_tokens']) * 100
-        print(f"Boundary firing rate: {boundary_rate:.2f}% of tokens")
-    print(f"{'='*80}\n")
+        print(f"HF backend enabled. Base model: {args.checkpoint}")
+        print(f"Generating solutions for {len(problems)} tasks using HF backend...")
+        model = HuggingFaceDecoder(
+            name=args.checkpoint,
+            dataset=args.dataset,
+            force_base_prompt=bool(args.force_base_prompt),
+            attn_implementation=str(args.attn_implementation),
+            device_map=None,
+            batch_size=1,
+            temperature=float(args.temperature),
+            max_new_tokens=int(args.max_new_tokens),
+            dtype=hf_dtype,
+            trust_remote_code=False,
+        )
 
-    # Write raw samples JSONL (pre-sanitization) alongside the sanitized one
-    raw_output_path = output_path.replace(".jsonl", ".raw.jsonl")
-    write_jsonl(raw_output_path, raw_samples, append=False, drop_builtin=True)
-    print(f"Wrote {len(raw_samples)} raw samples to {raw_output_path}")
+        # EvalPlus codegen writes both sanitized and raw outputs.
+        # It will also resume if the jsonl already exists.
+        evalplus_codegen(
+            target_path=output_path,
+            model=model,
+            dataset=problems,
+            greedy=(float(args.temperature) == 0.0),
+            n_samples=int(args.n_samples),
+            resume=True,
+        )
 
-    # Write samples JSONL (sanitized unless --no_sanitize)
-    write_jsonl(output_path, samples, append=False, drop_builtin=True)
-    print(f"Wrote {len(samples)} samples to {output_path}")
-    
-    # Debug: Show sample file info
-    if samples:
-        print(f"[DEBUG] Sample file info:")
-        print(f"[DEBUG]   Total samples: {len(samples)}")
-        print(f"[DEBUG]   First task_id: {samples[0].get('task_id', 'N/A')}")
-        first_solution = samples[0].get('solution', '')
-        print(f"[DEBUG]   First solution length: {len(first_solution)} chars")
-        print(f"[DEBUG]   First solution preview: {first_solution[:100]}...")
-        # Compute a simple hash of first sample for comparison
-        first_sample_hash = hashlib.md5(json.dumps(samples[0], sort_keys=True).encode()).hexdigest()[:8]
-        print(f"[DEBUG]   First sample hash (MD5 first 8 chars): {first_sample_hash}")
-    
-    # Write statistics to a separate file
-    stats_path = output_path.replace(".jsonl", "_stats.json")
-    with open(stats_path, 'w') as f:
-        json.dump(stats, f, indent=2)
-    print(f"Wrote statistics to {stats_path}")
+        # HF backend doesn't have BLT boundary stats; write a minimal stats file for consistency.
+        stats_path = output_path.replace(".jsonl", "_stats.json")
+        with open(stats_path, "w") as f:
+            json.dump(
+                {
+                    "backend": "hf",
+                    "total_tasks": int(len(problems) * max(1, int(args.n_samples))),
+                    "total_samples": int(len(problems) * max(1, int(args.n_samples))),
+                },
+                f,
+                indent=2,
+            )
+        print(f"Wrote statistics to {stats_path}")
+    else:
+        # BLT adapter inference backend (existing behavior)
+        print(f"Loading model from checkpoint: {args.checkpoint}")
+        print(f"[DEBUG] Checkpoint path (normalized): {os.path.normpath(args.checkpoint)}")
+        print(f"[DEBUG] Checkpoint exists: {os.path.exists(args.checkpoint)}")
+        adapter, tokenizer = load_adapter_and_tokenizer(
+            checkpoint_path=args.checkpoint,
+            model_path=args.model_path,
+            device=device,
+            dtype=dtype,
+            peft_adapter=args.peft_adapter if args.peft_adapter else None,
+        )
+        print(f"[DEBUG] Model loaded successfully from: {args.checkpoint}")
+
+        print(f"Generating solutions for {len(problems)} tasks...")
+        print(f"Inference hyperparameters:")
+        print(f"  - patcher: {patcher}")
+        print(f"  - use_local_decoder: {use_local_decoder}")
+        print(f"  - local_decoder_mode: {str(args.local_decoder_mode)}")
+        print(f"  - disable_local_encoder_only: {bool(args.disable_local_encoder_only)}")
+        print(f"  - min_rewrite_span_len: {int(args.min_rewrite_span_len)}")
+        if patcher == "learned":
+            print(f"  - boundary_threshold: {args.boundary_threshold}")
+            print(f"  - min_steps_between_patches: {args.min_steps_between_patches}")
+            print(f"  - max_patch_len: {args.max_patch_len}")
+        print(f"  - disable_patching_in_docstring: {args.disable_patching_in_docstring}")
+        print(f"  - temperature: {args.temperature}")
+        print(f"  - top_p: {args.top_p}")
+        print(f"  - repetition_penalty: {args.repetition_penalty}")
+        print(f"  - no_repeat_ngram_size: {args.no_repeat_ngram_size}")
+        print(f"  - sanitize_code: {not args.no_sanitize}")
+
+        # Generate solutions
+        samples, raw_samples, stats = generate_solutions_for_tasks(
+            model=adapter,
+            tokenizer=tokenizer,
+            problems=problems,
+            n_samples=args.n_samples,
+            max_new_tokens=args.max_new_tokens,
+            patcher=patcher,
+            boundary_threshold=args.boundary_threshold,
+            min_steps_between_patches=args.min_steps_between_patches,
+            max_patch_len=args.max_patch_len,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            repetition_penalty=args.repetition_penalty,
+            no_repeat_ngram_size=args.no_repeat_ngram_size,
+            disable_patching_in_docstring=args.disable_patching_in_docstring,
+            use_local_decoder=use_local_decoder,
+            local_decoder_mode=str(args.local_decoder_mode),
+            disable_local_encoder_only=bool(args.disable_local_encoder_only),
+            min_rewrite_span_len=int(args.min_rewrite_span_len),
+            sanitize_code=not args.no_sanitize,
+            collect_stats=True,
+        )
+
+        # Print boundary firing statistics
+        print(f"\n{'='*80}")
+        print("Boundary Firing Statistics")
+        print(f"{'='*80}")
+        print(f"Total tasks evaluated: {stats['total_tasks']}")
+        print(f"Total samples generated: {stats['total_samples']}")
+        print(f"Total boundaries fired: {stats['total_fired_boundaries']}")
+        print(f"Total tokens generated: {stats['total_tokens']}")
+        print(f"Average boundaries per task: {stats['avg_boundaries_per_task']:.2f}")
+        print(f"Average boundaries per token: {stats['avg_boundaries_per_token']:.4f}")
+        if stats['total_tokens'] > 0:
+            boundary_rate = (stats['total_fired_boundaries'] / stats['total_tokens']) * 100
+            print(f"Boundary firing rate: {boundary_rate:.2f}% of tokens")
+        print(f"{'='*80}\n")
+
+        # Write raw samples JSONL (pre-sanitization) alongside the sanitized one
+        raw_output_path = output_path.replace(".jsonl", ".raw.jsonl")
+        write_jsonl(raw_output_path, raw_samples, append=False, drop_builtin=True)
+        print(f"Wrote {len(raw_samples)} raw samples to {raw_output_path}")
+
+        # Write samples JSONL (sanitized unless --no_sanitize)
+        write_jsonl(output_path, samples, append=False, drop_builtin=True)
+        print(f"Wrote {len(samples)} samples to {output_path}")
+
+        # Debug: Show sample file info
+        if samples:
+            print(f"[DEBUG] Sample file info:")
+            print(f"[DEBUG]   Total samples: {len(samples)}")
+            print(f"[DEBUG]   First task_id: {samples[0].get('task_id', 'N/A')}")
+            first_solution = samples[0].get('solution', '')
+            print(f"[DEBUG]   First solution length: {len(first_solution)} chars")
+            print(f"[DEBUG]   First solution preview: {first_solution[:100]}...")
+            # Compute a simple hash of first sample for comparison
+            first_sample_hash = hashlib.md5(json.dumps(samples[0], sort_keys=True).encode()).hexdigest()[:8]
+            print(f"[DEBUG]   First sample hash (MD5 first 8 chars): {first_sample_hash}")
+
+        # Write statistics to a separate file
+        stats_path = output_path.replace(".jsonl", "_stats.json")
+        with open(stats_path, 'w') as f:
+            json.dump(stats, f, indent=2)
+        print(f"Wrote statistics to {stats_path}")
 
     # If we limited tasks for quick debugging, skip EvalPlus evaluation.
     # EvalPlus's evaluate() loads the full dataset internally and asserts that all tasks are present,

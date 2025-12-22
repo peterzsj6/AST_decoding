@@ -1,5 +1,5 @@
 """
-Baseline LM-only fine-tuning for Qwen2.5 on plain code `content`.
+Baseline LM-only fine-tuning for Qwen3 on plain code `content`.
 Matches the default hyperparameters used in blt_focused_training.py.
 """
 
@@ -122,8 +122,8 @@ def collate_fn(batch):
 
 
 def train_lm_baseline():
-    parser = argparse.ArgumentParser(description="Baseline LM-only finetune for Qwen2.5")
-    parser.add_argument("--model_path", type=str, default="/data/home/zhangsj/AST_decoding")
+    parser = argparse.ArgumentParser(description="Baseline LM-only finetune for Qwen3")
+    parser.add_argument("--model_path", type=str, default="/data/home/zhangsj/qwen3_4b")
     parser.add_argument(
         "--parquet",
         type=str,
@@ -137,14 +137,18 @@ def train_lm_baseline():
     parser.add_argument("--max_length", type=int, default=328)
     parser.add_argument("--dtype", type=str, default="auto", choices=["auto", "bf16", "fp16", "fp32"])
     parser.add_argument("--log_dir", type=str, default=None)
-    parser.add_argument("--trial_name", type=str, default="baseline")
+    parser.add_argument("--trial_name", type=str, default="baseline_qwen3_4b_add_layers")
     parser.add_argument("--warmup_steps", type=int, default=500)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=2)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--lr_scheduler", type=str, default="cosine", choices=["none", "cosine", "linear"])
     parser.add_argument("--lr_warmup_steps", type=int, default=500)
     parser.add_argument("--min_lr_ratio", type=float, default=0.1)
     parser.add_argument("--val_jsonl", type=str, default="/data/home/zhangsj/Data/HumanEval/human-eval-v2-20210705.jsonl")
     parser.add_argument("--eval_every_n_epochs", type=int, default=1)
+    parser.add_argument("--add_layers", action="store_true", help="Add 2 new transformer layers (default: True)")
+    parser.add_argument("--no-add_layers", dest="add_layers", action="store_false", help="Disable adding 2 new transformer layers, train model as-is (36 layers)")
+    parser.set_defaults(add_layers=True)
+    parser.add_argument("--trainable_layers", type=int, default=3, help="Number of last layers to keep trainable (default: 3)")
     args = parser.parse_args()
 
     trial_name = args.trial_name
@@ -209,37 +213,40 @@ def train_lm_baseline():
         model = model.to(device=device, dtype=dtype)
 
     # Add 2 transformer decoder layers to match BLT model's local decoder parameter count
-    if hasattr(model, 'model') and hasattr(model.model, 'layers') and len(model.model.layers) > 0:
-        # Get the layer class from existing layers
-        layer_class = type(model.model.layers[0])
-        config = model.config
-        original_layer_count = len(model.model.layers)
-        
-        # Extend layer_types if it exists (needed for Qwen2 models)
-        if hasattr(config, 'layer_types') and config.layer_types is not None:
-            # Use the last layer type for new layers (typically 'full_attention')
-            last_layer_type = config.layer_types[-1] if config.layer_types else 'full_attention'
-            config.layer_types.extend([last_layer_type] * 2)
-        
-        # Create 2 new decoder layers with the same configuration
-        new_layers = nn.ModuleList([
-            layer_class(config, layer_idx=original_layer_count + i)
-            for i in range(2)
-        ])
-        
-        # Append new layers to the existing layers
-        model.model.layers.extend(new_layers)
-        
-        # Update config to reflect new layer count
-        model.config.num_hidden_layers = len(model.model.layers)
-        
-        # Move new layers to correct device and dtype
-        for layer in new_layers:
-            layer.to(device=device, dtype=dtype)
-        
-        print(f"[Model] Added 2 new transformer layers. Total layers: {model.config.num_hidden_layers}")
+    if args.add_layers:
+        if hasattr(model, 'model') and hasattr(model.model, 'layers') and len(model.model.layers) > 0:
+            # Get the layer class from existing layers
+            layer_class = type(model.model.layers[0])
+            config = model.config
+            original_layer_count = len(model.model.layers)
+            
+            # Extend layer_types if it exists (needed for Qwen2/Qwen3 models)
+            if hasattr(config, 'layer_types') and config.layer_types is not None:
+                # Use the last layer type for new layers (typically 'full_attention')
+                last_layer_type = config.layer_types[-1] if config.layer_types else 'full_attention'
+                config.layer_types.extend([last_layer_type] * 2)
+            
+            # Create 2 new decoder layers with the same configuration
+            new_layers = nn.ModuleList([
+                layer_class(config, layer_idx=original_layer_count + i)
+                for i in range(2)
+            ])
+            
+            # Append new layers to the existing layers
+            model.model.layers.extend(new_layers)
+            
+            # Update config to reflect new layer count
+            model.config.num_hidden_layers = len(model.model.layers)
+            
+            # Move new layers to correct device and dtype
+            for layer in new_layers:
+                layer.to(device=device, dtype=dtype)
+            
+            print(f"[Model] Added 2 new transformer layers. Total layers: {model.config.num_hidden_layers}")
+        else:
+            print("[Model] Warning: Could not access model.model.layers, skipping layer addition")
     else:
-        print("[Model] Warning: Could not access model.model.layers, skipping layer addition")
+        print(f"[Model] Layer addition disabled. Using model as-is with {len(model.model.layers) if hasattr(model, 'model') and hasattr(model.model, 'layers') else 'unknown'} layers.")
 
     try:
         model.config.use_cache = False
@@ -250,17 +257,19 @@ def train_lm_baseline():
     except Exception:
         pass
 
-    # Freeze all layers except the last 3 (the original last layer + 2 newly added layers)
+    # Freeze all layers except the last N layers (configurable via --trainable_layers)
+    # If add_layers=True: freezes all except last N (original last layers + 2 newly added layers)
+    # If add_layers=False: freezes all except last N (original last N layers for Qwen3-4B)
     # This matches the BLT training approach where only the local decoder is trained
-    if hasattr(model, 'model') and hasattr(model.model, 'layers') and len(model.model.layers) >= 3:
-        # Freeze all transformer layers except the last 3
+    if hasattr(model, 'model') and hasattr(model.model, 'layers') and len(model.model.layers) >= args.trainable_layers:
+        # Freeze all transformer layers except the last N
         for i, layer in enumerate(model.model.layers):
-            if i < len(model.model.layers) - 3:
-                # Freeze all layers except the last 3
+            if i < len(model.model.layers) - args.trainable_layers:
+                # Freeze all layers except the last N
                 for p in layer.parameters():
                     p.requires_grad = False
             else:
-                # Keep the last 3 layers trainable
+                # Keep the last N layers trainable
                 for p in layer.parameters():
                     p.requires_grad = True
         
@@ -275,7 +284,9 @@ def train_lm_baseline():
             for p in model.lm_head.parameters():
                 p.requires_grad = True
         
-        print(f"[Model] Frozen all layers except the last 3. Trainable layers: {len(model.model.layers) - 3} to {len(model.model.layers) - 1}. LM head: trainable")
+        trainable_start = len(model.model.layers) - args.trainable_layers
+        trainable_end = len(model.model.layers) - 1
+        print(f"[Model] Frozen all layers except the last {args.trainable_layers}. Trainable layers: {trainable_start} to {trainable_end}. LM head: trainable")
     else:
         print("[Model] Warning: Could not freeze layers properly, all parameters will be trainable")
 

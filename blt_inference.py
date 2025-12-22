@@ -377,7 +377,9 @@ def incremental_generate(
     disable_patching_in_docstring: bool = True,
     collect_stats: bool = False,
     use_local_decoder: bool = True,  # Enable local decoder for span refinement
-    local_decoder_mode: str = "generate",  # "generate" = from scratch, "refine" = use global tokens as prefix
+    local_decoder_mode: str = "refine",  # "generate" = from scratch, "refine" = teacher-forced denoise using current span tokens
+    disable_local_encoder_only: bool = False,  # keep local decoder but skip local encoder span_memory
+    min_rewrite_span_len: int = 8,  # minimum span length to actually apply a rewrite (still finalizes boundary either way)
 ) -> str:
     enc = tokenizer(
         prompt_text,
@@ -467,19 +469,23 @@ def incremental_generate(
 
         # Safety: do not rewrite the prompt portion; only rewrite generated completion.
         # Also avoid rewriting very small spans which tend to be unstable.
-        min_rewrite_span_len = 8
-        allow_rewrite = bool(use_local_decoder) and (start >= prompt_len) and (span_len >= min_rewrite_span_len)
+        allow_rewrite = bool(use_local_decoder) and (start >= prompt_len) and (span_len >= int(min_rewrite_span_len))
 
         if allow_rewrite:
             # === LOCAL DECODER path ===
             # 1) Local encoder to get span memory (cross-attn input)
-            try:
-                span_memory = model.node_token_encoder(span_ids)
-            except Exception:
-                span_memory = None
+            # If disable_local_encoder_only is set, do NOT compute span_memory; let local decoder rely on:
+            #   - predicted span_latent from latent_from_global (student path analogue)
+            #   - global_memory cross-attention
+            span_memory = None
             span_mask = None
-            if span_memory is not None:
-                span_mask = torch.zeros(span_memory.size(1), dtype=torch.bool, device=device)
+            if not bool(disable_local_encoder_only):
+                try:
+                    span_memory = model.node_token_encoder(span_ids)
+                except Exception:
+                    span_memory = None
+                if span_memory is not None:
+                    span_mask = torch.zeros(span_memory.size(1), dtype=torch.bool, device=device)
 
             # 2) Predict span latent from global hidden at boundary (matches training latent_from_global path)
             global_hidden_at_start = global_hidden_seq[0, start, :]  # [H]
@@ -496,28 +502,88 @@ def incremental_generate(
                 global_kpm = None
 
             # 4) Decode node tokens using local decoder; refine by conditioning on original span tokens
-            prefix_ids = span_ids[0]  # original span tokens
+            # IMPORTANT:
+            # Training uses teacher forcing: input is BOS + gold[:-1], target is gold.
+            # So at inference we support two modes:
+            # - refine: one-pass denoise using teacher-forced inputs derived from current span tokens
+            # - generate: free-running greedy decode from BOS (no prefix)
+            mode = str(local_decoder_mode or "refine").lower()
+            decoded_ids = None
             with torch.no_grad():
-                decoded_ids = model.generate_node_tokens(
-                    span_latent=span_latent,
-                    span_memory=span_memory.squeeze(0) if span_memory is not None else None,
-                    span_key_padding_mask=span_mask if span_mask is not None else None,
-                    global_hidden=global_hidden_last,
-                    global_memory=global_memory.squeeze(0),
-                    global_key_padding_mask=global_kpm,
-                    # Important: when prefix_ids is provided, generate_node_tokens returns ONLY newly
-                    # generated tokens (excluding the prefix). To produce a same-length replacement,
-                    # we request span_len new tokens while allowing total length prefix+new via max_len.
-                    max_len=span_len * 2,
-                    prefix_ids=prefix_ids,
-                    num_new_tokens=span_len,  # generate a full replacement span of the same length
-                    bos_id=None,
-                    eos_id=eos_id,
-                )
+                if mode == "refine":
+                    # Teacher-forced denoise: predict each position using BOS + span[:-1] as input.
+                    # This keeps sequence length fixed and matches the training objective better than
+                    # "continue-after-prefix" generation.
+                    try:
+                        bos = int(getattr(model, "node_bos_id", getattr(model.config, "bos_token_id", 0)))
+                    except Exception:
+                        bos = 0
+                    prefix = span_ids[0].to(device=device, dtype=torch.long)  # [span_len]
+                    if int(prefix.numel()) != int(span_len):
+                        decoded_ids = prefix
+                    else:
+                        if span_len == 1:
+                            inp_ids = torch.tensor([bos], device=device, dtype=torch.long).unsqueeze(0)  # [1,1]
+                        else:
+                            inp_ids = torch.cat(
+                                [
+                                    torch.tensor([bos], device=device, dtype=torch.long),
+                                    prefix[:-1],
+                                ],
+                                dim=0,
+                            ).unsqueeze(0)  # [1, span_len]
+                        x = model.local_token_embed(inp_ids)  # [1, span_len, H]
+                        cond = model.latent_proj(span_latent).unsqueeze(0).unsqueeze(1)  # [1,1,H]
+                        # Normalize memory shapes to what LocalHybridDecoder expects:
+                        # - span_memory: [B,S,H]
+                        # - span_key_padding_mask: [B,S]
+                        # - global_memory: [B,G,H]
+                        # - global_key_padding_mask: [B,G]
+                        sm = None
+                        if span_memory is not None:
+                            sm = span_memory if span_memory.dim() == 3 else span_memory.unsqueeze(0)
+                        skpm = None
+                        if span_mask is not None:
+                            skpm = span_mask if span_mask.dim() == 2 else span_mask.unsqueeze(0)
+                        gm = global_memory if global_memory.dim() == 3 else global_memory.unsqueeze(0)
+                        gkpm = global_kpm
+                        if gkpm is not None and gkpm.dim() == 1:
+                            gkpm = gkpm.unsqueeze(0)
+                        h = model.local_decoder(
+                            x,
+                            cond,
+                            span_memory=sm,
+                            span_key_padding_mask=skpm,
+                            global_memory=gm,
+                            global_key_padding_mask=gkpm,
+                        )  # [1, span_len, H]
+                        # Residual path (same as generate_node_tokens)
+                        if hasattr(model, "global_residual_gate") and hasattr(model, "global_residual_scale"):
+                            global_expanded = global_hidden_last.unsqueeze(0).unsqueeze(0).expand_as(h)  # [1,T,H]
+                            gate_input = torch.cat([h, global_expanded], dim=-1)  # [1,T,2H]
+                            gate = model.global_residual_gate(gate_input)  # [1,T,1]
+                            h = (1 - gate) * h + gate * model.global_residual_scale * global_expanded
+                        logits_local = model.local_out_proj(h)  # [1, span_len, V]
+                        decoded_ids = torch.argmax(logits_local, dim=-1).view(-1).to(torch.long)  # [span_len]
+                else:
+                    # generate: free-running greedy decode from BOS (no prefix)
+                    decoded_ids = model.generate_node_tokens(
+                        span_latent=span_latent,
+                        span_memory=span_memory.squeeze(0) if span_memory is not None else None,
+                        span_key_padding_mask=span_mask if span_mask is not None else None,
+                        global_hidden=global_hidden_last,
+                        global_memory=global_memory.squeeze(0),
+                        global_key_padding_mask=global_kpm,
+                        max_len=int(span_len),
+                        prefix_ids=None,
+                        num_new_tokens=int(span_len),  # generate a full replacement span of the same length
+                        bos_id=None,
+                        eos_id=eos_id,
+                    )
 
             # We expect EXACTLY span_len replacement tokens. If not, fall back to the original global span.
-            if decoded_ids.numel() == span_len:
-                new_node_tensor = decoded_ids.unsqueeze(0).to(device=device, dtype=input_ids.dtype)
+            if decoded_ids is not None and decoded_ids.numel() == span_len:
+                new_node_tensor = decoded_ids.view(1, -1).to(device=device, dtype=input_ids.dtype)
             else:
                 new_node_tensor = span_ids.to(device=device, dtype=input_ids.dtype)
         else:
@@ -547,19 +613,26 @@ def incremental_generate(
                 attention_mask=attention_mask,
                 output_hidden_states=True,
             )
-        return outputs.logits[:, -1, :], outputs.hidden_states[-1]  # type: ignore[attr-defined]
+        hs = None
+        try:
+            hs = list(outputs.hidden_states) if hasattr(outputs, "hidden_states") and outputs.hidden_states is not None else None  # type: ignore[attr-defined]
+        except Exception:
+            hs = None
+        last = outputs.hidden_states[-1] if hs is None else hs[-1]  # type: ignore[attr-defined]
+        return outputs.logits[:, -1, :], last, hs  # logits_last, last_hidden_seq, hidden_states_list
 
-    logits, global_hidden_seq = recompute_hidden_states()
+    logits, global_hidden_seq, hidden_states_list = recompute_hidden_states()
     last_hidden = global_hidden_seq[:, -1, :]
     logits_valid = True
     fired_boundaries = 0
     total_tokens = 0
     boundary_predictions = []  # Track boundary predictions for debugging
+    boundary_events = []  # Per-boundary trigger events for debugging/analysis
 
     def ensure_fresh_states():
-        nonlocal logits, global_hidden_seq, last_hidden, logits_valid
+        nonlocal logits, global_hidden_seq, hidden_states_list, last_hidden, logits_valid
         if not logits_valid:
-            logits, global_hidden_seq = recompute_hidden_states()
+            logits, global_hidden_seq, hidden_states_list = recompute_hidden_states()
             last_hidden = global_hidden_seq[:, -1, :]
             logits_valid = True
 
@@ -572,7 +645,16 @@ def incremental_generate(
             entropy_score = compute_entropy(logits[0])
         if patcher == "learned":
             with torch.no_grad():
-                boundary_logits = model.boundary_head(last_hidden)
+                # Use same boundary feature path as training if available (mid+last concatenation).
+                try:
+                    # Construct [B,L,H] tensors for a single position to reuse model.compute_boundary_logits()
+                    last_seq = global_hidden_seq[:, -1:, :]  # [1,1,H]
+                    hs_seq = None
+                    if hidden_states_list is not None:
+                        hs_seq = [h[:, -1:, :] for h in hidden_states_list]
+                    boundary_logits = model.compute_boundary_logits(last_hidden=last_seq, hidden_states=hs_seq)[:, 0, :]
+                except Exception:
+                    boundary_logits = model.boundary_head(last_hidden)
                 probs = torch.softmax(boundary_logits, dim=-1)
                 boundary_confidence = float(probs[0, 1].item())
                 boundary_predictions.append(boundary_confidence)
@@ -634,6 +716,20 @@ def incremental_generate(
 
         if is_new_node:
             ensure_fresh_states()
+            # Record boundary trigger token (the last token appended) and confidence (if learned patcher)
+            try:
+                tok_txt = tokenizer.decode([next_id], skip_special_tokens=True)
+            except Exception:
+                tok_txt = ""
+            boundary_events.append(
+                {
+                    "pos": int(input_ids.size(1) - 1),  # absolute position in current sequence
+                    "token_id": int(next_id),
+                    "token_text": tok_txt,
+                    "boundary_confidence": (float(boundary_confidence) if boundary_confidence is not None else None),
+                    "steps_since_patch": int(steps_since_patch),
+                }
+            )
             finalize_completed_node(global_hidden_seq, include_last_token=False)
             steps_since_patch = 0
             logits_valid = False
@@ -659,7 +755,18 @@ def incremental_generate(
             current_node_start_idx = input_ids.size(1)
     output = tokenizer.decode(input_ids[0], skip_special_tokens=True)
     if collect_stats:
-        return output, {"fired_boundaries": fired_boundaries, "total_tokens": total_tokens}
+        boundary_rate = (float(fired_boundaries) / float(total_tokens)) if total_tokens > 0 else 0.0
+        return output, {
+            "fired_boundaries": int(fired_boundaries),
+            "total_tokens": int(total_tokens),
+            "boundary_rate": float(boundary_rate),
+            # Flattened convenience columns for CSV visualization
+            "boundary_trigger_token_ids": [int(e.get("token_id", -1)) for e in boundary_events],
+            "boundary_trigger_tokens": [str(e.get("token_text", "")) for e in boundary_events],
+            "boundary_trigger_confidences": [e.get("boundary_confidence", None) for e in boundary_events],
+            # Full event list (richer debugging)
+            "boundary_events": boundary_events,
+        }
     return output
 
 

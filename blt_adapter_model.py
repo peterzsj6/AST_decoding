@@ -533,6 +533,9 @@ class BLTAdapterModel(Qwen2ForCausalLM):
 
         # Learned patch boundary head (binary classification: 1=start/single; 0=otherwise)
         self.boundary_head = nn.Linear(self.hidden_size, 2)
+        # Optional boundary feature projection for multi-layer features (mid+last concatenation).
+        # Kept lightweight to avoid impacting the base LM; used only for boundary prediction.
+        self.boundary_feat_proj = nn.Linear(self.hidden_size * 2, self.hidden_size)
         # Latent-from-global projector to predict span latent from global hidden at boundary
         self.latent_from_global = nn.Sequential(
             nn.Linear(self.hidden_size, self.hidden_size * 2),
@@ -565,6 +568,47 @@ class BLTAdapterModel(Qwen2ForCausalLM):
             nn.Linear(self.hidden_size, 1),
             nn.Sigmoid(),
         )
+
+    def _resolve_hidden_index(self, hidden_states: List[torch.Tensor], idx: int) -> int:
+        """
+        Resolve a possibly-negative hidden state index safely into [0, len(hidden_states)-1].
+        """
+        n = int(len(hidden_states))
+        if n <= 0:
+            return 0
+        i = int(idx)
+        if i < 0:
+            i = n + i
+        i = max(0, min(n - 1, i))
+        return i
+
+    def compute_boundary_logits(
+        self,
+        *,
+        last_hidden: torch.Tensor,
+        hidden_states: Optional[List[torch.Tensor]] = None,
+    ) -> torch.Tensor:
+        """
+        Compute boundary logits from global hidden states.
+        - last_hidden: [B,L,H] (typically final layer)
+        - hidden_states: optional list of [B,L,H] from the global transformer
+        Returns: [B,L,2]
+        """
+        mode = str(getattr(self, "boundary_feature_mode", "last"))
+        if mode == "concat_mid_last" and hidden_states is not None and len(hidden_states) >= 2:
+            mid_idx = int(getattr(self, "boundary_mid_layer", -2))
+            mi = self._resolve_hidden_index(hidden_states, mid_idx)
+            mid = hidden_states[mi]
+            # Ensure same dtype/device
+            if mid.dtype != last_hidden.dtype:
+                mid = mid.to(dtype=last_hidden.dtype)
+            if mid.device != last_hidden.device:
+                mid = mid.to(device=last_hidden.device)
+            feat2 = torch.cat([mid, last_hidden], dim=-1)  # [B,L,2H]
+            feat = self.boundary_feat_proj(feat2)  # [B,L,H]
+            return self.boundary_head(feat)
+        # Fallback: last-layer features
+        return self.boundary_head(last_hidden)
 
     def copy_base_embeddings_from(self, base: Qwen2ForCausalLM) -> None:
         """
@@ -669,10 +713,77 @@ class BLTAdapterModel(Qwen2ForCausalLM):
                     span_types = span_types.to(boundaries.device)
                     textual_mask = torch.isin(span_types, self.textual_span_type_ids.to(boundaries.device))
                     pos_mask = pos_mask & (~textual_mask)
+
+                # Optional: rewrite-worthy boundary targets.
+                # Gate boundary positives to spans where rewriting is actually needed, measured by
+                # teacher-forced global argmax != gold inside the span.
+                try:
+                    mode = str(getattr(self, "boundary_target_mode", "ast_start"))
+                except Exception:
+                    mode = "ast_start"
+                if (
+                    mode == "rewrite_worthy"
+                    and global_argmax_ids is not None
+                    and isinstance(input_ids, torch.Tensor)
+                    and isinstance(span_metadata.get("raw_spans", None), list)
+                ):
+                    try:
+                        mismatch_thr = float(getattr(self, "boundary_rewrite_mismatch_threshold", 0.2))
+                    except Exception:
+                        mismatch_thr = 0.2
+                    try:
+                        min_len = int(getattr(self, "boundary_rewrite_min_span_len", 2))
+                    except Exception:
+                        min_len = 2
+                    raw_spans = span_metadata.get("raw_spans", [])
+                    bsz = int(boundaries.size(0))
+                    seqlen = int(boundaries.size(1))
+                    rewrite_mask = torch.zeros_like(pos_mask, dtype=torch.bool)
+                    for b in range(min(bsz, len(raw_spans))):
+                        item_spans = raw_spans[b]
+                        if not isinstance(item_spans, list):
+                            continue
+                        for sp in item_spans:
+                            if not isinstance(sp, dict):
+                                continue
+                            idxs = sp.get("indices", None)
+                            if idxs is None:
+                                idxs = sp.get("token_indices", None)
+                            if not isinstance(idxs, list) or len(idxs) == 0:
+                                continue
+                            # Default excludes singles by requiring len>=2 (min_len default=2)
+                            if len(idxs) < int(min_len):
+                                continue
+                            valid = [int(i) for i in idxs if 0 <= int(i) < seqlen]
+                            if len(valid) < int(min_len):
+                                continue
+                            idx_t = torch.tensor(valid, device=boundaries.device, dtype=torch.long)
+                            try:
+                                mism = (global_argmax_ids[b, idx_t] != input_ids[b, idx_t]).float().mean().item()
+                            except Exception:
+                                continue
+                            if float(mism) <= float(mismatch_thr):
+                                continue
+                            start_pos = sp.get("start", None)
+                            if start_pos is None:
+                                start_pos = min(valid)
+                            start_pos = int(start_pos)
+                            if 0 <= start_pos < seqlen:
+                                rewrite_mask[b, start_pos] = True
+                    pos_mask = pos_mask & rewrite_mask
+                    # Ensure singles are not treated as positives unless explicitly enabled.
+                    if not include_singles:
+                        pos_mask = pos_mask & (boundaries != 3)
                 boundary_targets = pos_mask.long()  # [B, L]
                 # Mask to valid positions
                 mask = attention_mask.to(torch.bool) if attention_mask is not None else torch.ones_like(boundary_targets, dtype=torch.bool, device=boundary_targets.device)
-                logits = self.boundary_head(last_hidden_for_heads)  # [B, L, 2]
+                # Boundary logits: optionally use multi-layer features (mid+last) to avoid relying only on last-layer next-token features.
+                hs_list = None
+                try:
+                    hs_list = list(outputs.hidden_states) if hasattr(outputs, "hidden_states") and outputs.hidden_states is not None else None
+                except Exception:
+                    hs_list = None
+                logits = self.compute_boundary_logits(last_hidden=last_hidden_for_heads, hidden_states=hs_list)  # [B, L, 2]
                 
                 # Compute class weights if needed (handle class imbalance)
                 class_weight = None
@@ -971,6 +1082,10 @@ class BLTAdapterModel(Qwen2ForCausalLM):
             sel = self._segment_non_overlapping(item_spans, seq_len, max_nodes=max_nodes)
             if not sel:
                 continue
+            # Training-time span filter for rewrite-parallel / local recon:
+            # skip very short spans (e.g. single-token spans) to better match inference,
+            # reduce noise, and avoid spending node budget on trivial spans.
+            min_span_len = int(getattr(self, "rewrite_min_span_len", 2))
             for sp in sel:
                 idxs = sp['indices']
                 if len(idxs) == 0:
@@ -980,6 +1095,8 @@ class BLTAdapterModel(Qwen2ForCausalLM):
                 token_seq = input_ids[b, torch.tensor(idxs, device=device)].detach()
                 L = int(token_seq.shape[0])
                 if L <= 0:
+                    continue
+                if L < min_span_len:
                     continue
                 # store start index if available
                 start_idx = int(sp.get('start', int(torch.tensor(idxs, device=device).min().item())))
@@ -1137,14 +1254,71 @@ class BLTAdapterModel(Qwen2ForCausalLM):
             global_mem_b = last_hidden_for_heads[b:b+1, :, :] if isinstance(last_hidden_for_heads, torch.Tensor) else None  # [1,L,H]
             global_kpm_b = (~attn_mask_bool[b:b+1, :]) if global_mem_b is not None else None  # [1,L]
 
-            dec_out_teacher_b = self.local_decoder(
-                tok_emb_b,
-                teacher_latent_b,
-                span_memory=span_mem_b,
-                span_key_padding_mask=span_kpm_b,
-                global_memory=global_mem_b,
-                global_key_padding_mask=global_kpm_b,
-            )  # [N_b, L, H]
+            # === Span-memory dropout (train analogue of inference disable_local_encoder_only) ===
+            # With probability p_drop, do not provide span_memory/keys to the local decoder, forcing it to rely on:
+            #   - span_latent (teacher_latent_b)
+            #   - global_memory cross-attention
+            # This reduces train–infer mismatch and improves robustness when span_memory is absent at inference.
+            try:
+                p_drop = float(getattr(self, "span_mem_drop_p", 0.0))
+            except Exception:
+                p_drop = 0.0
+
+            if p_drop > 0.0 and span_mem_b is not None and span_kpm_b is not None:
+                # Per-node dropout: split nodes into keep vs drop groups to preserve shapes.
+                drop_mask = (torch.rand((tok_emb_b.size(0),), device=device) < float(p_drop))
+                keep_mask = ~drop_mask
+                if torch.any(drop_mask) and torch.any(keep_mask):
+                    idx_keep = torch.nonzero(keep_mask, as_tuple=False).view(-1)
+                    idx_drop = torch.nonzero(drop_mask, as_tuple=False).view(-1)
+                    out_keep = self.local_decoder(
+                        tok_emb_b.index_select(0, idx_keep),
+                        teacher_latent_b.index_select(0, idx_keep),
+                        span_memory=span_mem_b.index_select(0, idx_keep),
+                        span_key_padding_mask=span_kpm_b.index_select(0, idx_keep),
+                        global_memory=global_mem_b,
+                        global_key_padding_mask=global_kpm_b,
+                    )
+                    out_drop = self.local_decoder(
+                        tok_emb_b.index_select(0, idx_drop),
+                        teacher_latent_b.index_select(0, idx_drop),
+                        span_memory=None,
+                        span_key_padding_mask=None,
+                        global_memory=global_mem_b,
+                        global_key_padding_mask=global_kpm_b,
+                    )
+                    dec_out_teacher_b = torch.empty_like(tok_emb_b)
+                    dec_out_teacher_b.index_copy_(0, idx_keep, out_keep)
+                    dec_out_teacher_b.index_copy_(0, idx_drop, out_drop)
+                elif torch.any(drop_mask):
+                    # All dropped
+                    dec_out_teacher_b = self.local_decoder(
+                        tok_emb_b,
+                        teacher_latent_b,
+                        span_memory=None,
+                        span_key_padding_mask=None,
+                        global_memory=global_mem_b,
+                        global_key_padding_mask=global_kpm_b,
+                    )
+                else:
+                    # None dropped
+                    dec_out_teacher_b = self.local_decoder(
+                        tok_emb_b,
+                        teacher_latent_b,
+                        span_memory=span_mem_b,
+                        span_key_padding_mask=span_kpm_b,
+                        global_memory=global_mem_b,
+                        global_key_padding_mask=global_kpm_b,
+                    )
+            else:
+                dec_out_teacher_b = self.local_decoder(
+                    tok_emb_b,
+                    teacher_latent_b,
+                    span_memory=span_mem_b,
+                    span_key_padding_mask=span_kpm_b,
+                    global_memory=global_mem_b,
+                    global_key_padding_mask=global_kpm_b,
+                )  # [N_b, L, H]
 
             # Residual (per-node)
             if hasattr(self, 'global_residual_gate') and hasattr(self, 'global_residual_scale'):
