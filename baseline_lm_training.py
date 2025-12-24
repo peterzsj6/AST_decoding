@@ -6,6 +6,7 @@ Matches the default hyperparameters used in blt_focused_training.py.
 import argparse
 import math
 import os
+import shutil
 from typing import Dict
 
 import numpy as np
@@ -38,12 +39,26 @@ class ContentOnlyDataset(Dataset):
         if not os.path.exists(parquet_path):
             raise FileNotFoundError(f"Parquet path not found: {parquet_path}")
         # Pandas can read a directory of shards directly.
+        # Check if it's a directory and list files for debugging
+        if os.path.isdir(parquet_path):
+            parquet_files = [f for f in os.listdir(parquet_path) if f.endswith('.parquet')]
+            print(f"[Dataset] Reading parquet directory: {parquet_path} with {len(parquet_files)} parquet files")
         self.df = pd.read_parquet(parquet_path)
+        print(f"[Dataset] Raw parquet read: {len(self.df)} rows")
         content_filter = (self.df["content"].notna()) & (self.df["content"].str.strip() != "")
         self.df = self.df[content_filter]
+        
+        # Check for duplicates
+        initial_len = len(self.df)
+        if 'content' in self.df.columns:
+            self.df = self.df.drop_duplicates(subset=['content'], keep='first')
+            final_len = len(self.df)
+            if initial_len != final_len:
+                print(f"[Dataset] Removed {initial_len - final_len} duplicate rows (had {initial_len}, now {final_len})")
+        
         self.tokenizer = tokenizer
         self.max_length = max_length
-        print(f"[Dataset] Loaded {len(self.df)} rows from {parquet_path}")
+        print(f"[Dataset] Final dataset size: {len(self.df)} rows from {parquet_path}")
 
     def __len__(self):
         return len(self.df)
@@ -149,6 +164,8 @@ def train_lm_baseline():
     parser.add_argument("--no-add_layers", dest="add_layers", action="store_false", help="Disable adding 2 new transformer layers, train model as-is (36 layers)")
     parser.set_defaults(add_layers=True)
     parser.add_argument("--trainable_layers", type=int, default=3, help="Number of last layers to keep trainable (default: 3)")
+    parser.add_argument("--save_steps", type=int, default=5000, help="Save checkpoint every N steps (default: 5000)")
+    parser.add_argument("--save_total_limit", type=int, default=5, help="Maximum number of step checkpoints to keep (default: 5)")
     args = parser.parse_args()
 
     trial_name = args.trial_name
@@ -295,6 +312,18 @@ def train_lm_baseline():
 
     steps_per_epoch = len(dataloader) // args.gradient_accumulation_steps
     total_optimizer_steps = max(1, args.epochs * steps_per_epoch)
+    print(f"[DataLoader] Dataset size: {len(dataset)} samples")
+    print(f"[DataLoader] Batches per epoch: {len(dataloader)}")
+    print(f"[DataLoader] Steps per epoch: {steps_per_epoch} (with gradient_accumulation_steps={args.gradient_accumulation_steps})")
+    print(f"[DataLoader] Total training steps: {total_optimizer_steps} (for {args.epochs} epochs)")
+    
+    # Warn if dataset seems unexpectedly large
+    expected_steps = 1000  # User's expected steps per epoch
+    if steps_per_epoch > expected_steps * 2:
+        print(f"[WARNING] Dataset appears much larger than expected!")
+        print(f"[WARNING] Expected ~{expected_steps} steps per epoch, but got {steps_per_epoch} steps per epoch")
+        print(f"[WARNING] This suggests the dataset has {len(dataset)} samples instead of expected ~{expected_steps * args.batch_size}")
+        print(f"[WARNING] Please verify the parquet path and dataset contents")
 
     scheduler = None
     if args.lr_scheduler == "cosine":
@@ -329,6 +358,9 @@ def train_lm_baseline():
     global_step = 0
     # Store loss tensors instead of converting to float immediately to avoid CPU-GPU sync
     accumulated_loss_tensor = torch.tensor(0.0, device=device, dtype=dtype)
+    
+    # Track saved step checkpoints for cleanup
+    saved_step_checkpoints = []
 
     @torch.no_grad()
     def run_validation(val_loader, epoch_num):
@@ -353,6 +385,7 @@ def train_lm_baseline():
     for epoch in range(args.epochs):
         # Store loss tensors instead of converting to float immediately
         epoch_loss_tensors = []
+        print(f"[Epoch {epoch+1}] Starting epoch {epoch+1}/{args.epochs}, total batches: {len(dataloader)}")
         for batch_idx, batch in enumerate(dataloader):
             # Use non_blocking transfer for better overlap with computation
             input_ids = batch["input_ids"].to(device, non_blocking=True)
@@ -388,8 +421,38 @@ def train_lm_baseline():
                     if torch.cuda.is_available():
                         writer.add_scalar("mem/alloc_GB", torch.cuda.memory_allocated() / (1024 ** 3), global_step)
                     print(f"epoch {epoch+1} step {global_step} lr {opt.param_groups[0]['lr']:.2e} | loss {avg_accum_loss:.4f}")
+                
+                # Save checkpoint periodically during training
+                if global_step % args.save_steps == 0:
+                    save_dir = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                    os.makedirs(save_dir, exist_ok=True)
+                    model.save_pretrained(save_dir)
+                    tokenizer.save_pretrained(save_dir)
+                    # Save optimizer and scheduler state
+                    torch.save({
+                        'optimizer': opt.state_dict(),
+                        'scheduler': scheduler.state_dict() if scheduler is not None else None,
+                        'global_step': global_step,
+                        'epoch': epoch,
+                    }, os.path.join(save_dir, "training_state.pt"))
+                    saved_step_checkpoints.append((global_step, save_dir))
+                    writer.add_text("checkpoints/step", f"Saved checkpoint: {save_dir}", global_step)
+                    print(f"[Checkpoint] Saved step checkpoint to {save_dir}")
+                    
+                    # Clean up old checkpoints if limit exceeded
+                    if len(saved_step_checkpoints) > args.save_total_limit:
+                        # Remove oldest checkpoint
+                        old_step, old_dir = saved_step_checkpoints.pop(0)
+                        if os.path.exists(old_dir):
+                            shutil.rmtree(old_dir)
+                            print(f"[Checkpoint] Removed old checkpoint: {old_dir}")
+            
+            # Debug: Print progress every 100 batches to verify epoch is progressing
+            if (batch_idx + 1) % 100 == 0:
+                print(f"[Epoch {epoch+1}] Processed {batch_idx + 1}/{len(dataloader)} batches")
 
         # Convert tensors to floats only at epoch end
+        print(f"[Epoch {epoch+1}] Completed all {len(dataloader)} batches")
         epoch_losses = [float(t.item()) for t in epoch_loss_tensors] if epoch_loss_tensors else []
         avg_epoch_loss = float(np.mean(epoch_losses)) if epoch_losses else 0.0
         print(f"[Epoch {epoch+1}] Avg loss: {avg_epoch_loss:.4f}")

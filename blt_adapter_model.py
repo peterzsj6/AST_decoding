@@ -1379,6 +1379,42 @@ class BLTAdapterModel(Qwen2ForCausalLM):
             loss_vec = lse_total - target_logit.float()
             return loss_vec.mean()
 
+        def _linear_argmax_chunked(
+            hidden: torch.Tensor,
+            out_proj: nn.Linear,
+            chunk_size: int = 4096,
+        ) -> torch.Tensor:
+            """
+            Memory-efficient argmax over vocab for out_proj(hidden) without materializing [M, V] logits.
+            - hidden: [..., H]
+            Returns: argmax token ids with shape [...]
+            """
+            x = hidden.reshape(-1, hidden.size(-1))  # [M, H]
+            weight = out_proj.weight                 # [V, H]
+            bias = out_proj.bias                     # [V] or None
+            vocab = int(weight.size(0))
+            best_val: Optional[torch.Tensor] = None
+            best_idx: Optional[torch.Tensor] = None
+            for start in range(0, vocab, int(chunk_size)):
+                end = min(vocab, start + int(chunk_size))
+                w = weight[start:end, :]  # [C, H]
+                logits = x @ w.t()
+                if bias is not None:
+                    logits = logits + bias[start:end]
+                chunk_val, chunk_idx = torch.max(logits, dim=-1)  # [M]
+                chunk_idx = chunk_idx.to(torch.long) + int(start)
+                if best_val is None:
+                    best_val = chunk_val
+                    best_idx = chunk_idx
+                else:
+                    better = chunk_val > best_val
+                    best_val = torch.where(better, chunk_val, best_val)
+                    best_idx = torch.where(better, chunk_idx, best_idx)
+            if best_idx is None:
+                # Should not happen, but keep safe behavior.
+                return torch.zeros(hidden.shape[:-1], device=hidden.device, dtype=torch.long)
+            return best_idx.view(hidden.shape[:-1])
+
         # Targets with ignore_index outside mask
         targets_full = torch.where(
             mask_batch,
@@ -1420,6 +1456,20 @@ class BLTAdapterModel(Qwen2ForCausalLM):
             # Only materialize full student outputs if KL is enabled (it needs full logits).
             dec_out_student_full = torch.empty_like(tok_emb) if float(getattr(self, "kl_weight", 0.0)) > 0.0 else None
 
+            # Local-decoder input mode: teacher-forced vs self-conditioning (approx free-run).
+            # self_condition: run a teacher-forced pass to get predicted tokens, then re-run using BOS+pred[:-1] as inputs.
+            try:
+                train_mode = str(getattr(self, "local_decoder_train_mode", "teacher")).lower()
+            except Exception:
+                train_mode = "teacher"
+            try:
+                p_self_cond = float(getattr(self, "local_decoder_self_condition_p", 0.0))
+            except Exception:
+                p_self_cond = 0.0
+            use_self_cond = bool(train_mode == "self_condition") and (float(p_self_cond) > 0.0) and (torch.rand((), device=device).item() < float(p_self_cond))
+            aux_losses["local_decoder_self_condition_p"] = torch.tensor(float(p_self_cond), device=device, dtype=torch.float32)
+            aux_losses["local_decoder_used_self_condition"] = torch.tensor(1.0 if use_self_cond else 0.0, device=device, dtype=torch.float32)
+
             for b in range(batch_size):
                 idx_list = by_b[b]
                 if not idx_list:
@@ -1451,6 +1501,46 @@ class BLTAdapterModel(Qwen2ForCausalLM):
                     gate_input = torch.cat([dec_out_student_b, global_hidden_expanded], dim=-1)
                     gate = self.global_residual_gate(gate_input)
                     dec_out_student_b = (1 - gate) * dec_out_student_b + gate * self.global_residual_scale * global_hidden_expanded
+
+                # Optional self-conditioning second pass (BOS + predicted_tokens[:-1]).
+                # This approximates free-run generation while keeping training differentiable and efficient.
+                if use_self_cond:
+                    try:
+                        # Compute predicted token ids from the first pass without materializing full logits.
+                        pred_ids = _linear_argmax_chunked(
+                            dec_out_student_b.detach(),
+                            self.local_out_proj,
+                            chunk_size=int(getattr(self, "ce_chunk_size", 4096)),
+                        )  # [N_b, L]
+                        # Build new decoder input ids: BOS + pred_ids[:-1] (masked by target availability).
+                        tgt_b = targets_full.index_select(0, idx)  # [N_b, L]
+                        mb = mask_batch.index_select(0, idx)       # [N_b, L]
+                        inp2 = torch.full_like(tgt_b, fill_value=pad_id, dtype=torch.long, device=device)
+                        inp2[:, 0] = int(getattr(self, "node_bos_id", 0))
+                        if inp2.size(1) > 1:
+                            # Only shift where we have a valid target at the previous position.
+                            prev_valid = mb[:, :-1]
+                            shifted = pred_ids[:, :-1].to(torch.long)
+                            inp2[:, 1:] = torch.where(prev_valid, shifted, torch.full_like(shifted, pad_id))
+                        tok_emb_b2 = self.local_token_embed(inp2)
+                        dec_out_student_b2 = self.local_decoder(
+                            tok_emb_b2,
+                            student_latent_b,
+                            span_memory=span_mem_b,
+                            span_key_padding_mask=span_kpm_b,
+                            global_memory=global_mem_b,
+                            global_key_padding_mask=global_kpm_b,
+                        )
+                        if hasattr(self, 'global_residual_gate') and hasattr(self, 'global_residual_scale'):
+                            global_hidden_b = global_hiddens_batch.index_select(0, idx)
+                            global_hidden_expanded = global_hidden_b.unsqueeze(1).expand_as(dec_out_student_b2)
+                            gate_input = torch.cat([dec_out_student_b2, global_hidden_expanded], dim=-1)
+                            gate = self.global_residual_gate(gate_input)
+                            dec_out_student_b2 = (1 - gate) * dec_out_student_b2 + gate * self.global_residual_scale * global_hidden_expanded
+                        dec_out_student_b = dec_out_student_b2
+                    except Exception:
+                        # If anything goes wrong, keep teacher-forced student pass.
+                        pass
 
                 if dec_out_student_full is not None:
                     dec_out_student_full.index_copy_(0, idx, dec_out_student_b)

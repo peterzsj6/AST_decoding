@@ -11,6 +11,9 @@ PROJECT_ROOT = "/data/home/zhangsj"
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+# Avoid HuggingFace tokenizer's "forked after parallelism" spam if any caller later forks.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 from transformers import AutoTokenizer
 from AST_decoding.blt_adapter_model import create_blt_adapter_model, BLTAdapterModel  # type: ignore
 # Optional PEFT import (only needed if --peft_adapter is provided)

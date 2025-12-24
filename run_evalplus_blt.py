@@ -11,6 +11,10 @@ vendored EvalPlus HF provider by using `--backend hf`.
 import os
 import sys
 
+# Avoid HuggingFace tokenizer's "forked after parallelism" spam when EvalPlus uses multiprocessing.
+# This must be set before any `transformers`/`tokenizers` code is imported/used.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 # Parse --gpu argument first (before importing torch) to set CUDA_VISIBLE_DEVICES
 # This must be done BEFORE importing torch or any module that imports torch
 _gpu_arg = None
@@ -27,7 +31,7 @@ for i, arg in enumerate(sys.argv[1:], 1):
 if _gpu_arg is not None:
     os.environ["CUDA_VISIBLE_DEVICES"] = _gpu_arg
 elif "CUDA_VISIBLE_DEVICES" not in os.environ:
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Default to GPU 7
+    os.environ["CUDA_VISIBLE_DEVICES"] = "5"  # Default to GPU 7
 
 import argparse
 import json
@@ -252,7 +256,14 @@ def parse_args() -> argparse.Namespace:
     # BLT-specific inference hyperparameters
     parser.add_argument("--patcher", type=str, default="learned", choices=["none", "heuristic", "entropy", "learned"],
                        help="Patch strategy. 'none' disables all patching (base model only).")
-    parser.add_argument("--boundary_threshold", type=float, default=0.5, help="Threshold for boundary head predictions")
+    # Default is resolved at runtime: if not provided, we try to use the checkpoint's own setting.
+    parser.add_argument(
+        "--boundary_threshold",
+        type=float,
+        default=None,
+        help="Threshold for boundary head predictions. If omitted, uses checkpoint default (e.g. adapter.rewrite_boundary_threshold) when available.",
+    )
+    # Conservative default to avoid over-patching (patching too frequently tends to hurt pass@1).
     parser.add_argument("--min_steps_between_patches", type=int, default=4, help="Minimum steps between boundary patches")
     parser.add_argument("--max_patch_len", type=int, default=128, help="Maximum span length to rewrite")
     parser.add_argument("--disable_patching_in_docstring", action="store_true", default=True, help="Prevent patching in docstrings/comments")
@@ -482,6 +493,14 @@ def main():
         )
         print(f"[DEBUG] Model loaded successfully from: {args.checkpoint}")
 
+        # If user did not set boundary_threshold, align inference with what the checkpoint was trained with (when available).
+        boundary_threshold = args.boundary_threshold
+        if boundary_threshold is None:
+            # Training script uses --rewrite_boundary_threshold (stored on adapter as rewrite_boundary_threshold).
+            # Fall back to inference default if missing.
+            boundary_threshold = float(getattr(adapter, "rewrite_boundary_threshold", 0.65))
+            print(f"[setup] boundary_threshold not provided; using checkpoint/default value: {boundary_threshold}")
+
         print(f"Generating solutions for {len(problems)} tasks...")
         print(f"Inference hyperparameters:")
         print(f"  - patcher: {patcher}")
@@ -490,7 +509,7 @@ def main():
         print(f"  - disable_local_encoder_only: {bool(args.disable_local_encoder_only)}")
         print(f"  - min_rewrite_span_len: {int(args.min_rewrite_span_len)}")
         if patcher == "learned":
-            print(f"  - boundary_threshold: {args.boundary_threshold}")
+            print(f"  - boundary_threshold: {boundary_threshold}")
             print(f"  - min_steps_between_patches: {args.min_steps_between_patches}")
             print(f"  - max_patch_len: {args.max_patch_len}")
         print(f"  - disable_patching_in_docstring: {args.disable_patching_in_docstring}")
@@ -508,7 +527,7 @@ def main():
             n_samples=args.n_samples,
             max_new_tokens=args.max_new_tokens,
             patcher=patcher,
-            boundary_threshold=args.boundary_threshold,
+            boundary_threshold=float(boundary_threshold),
             min_steps_between_patches=args.min_steps_between_patches,
             max_patch_len=args.max_patch_len,
             temperature=args.temperature,

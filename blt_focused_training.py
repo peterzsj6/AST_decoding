@@ -13,6 +13,9 @@ from typing import Dict, List, Optional, Tuple
 import os
 if 'LOCAL_RANK' not in os.environ:
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+# Avoid HuggingFace tokenizer's "forked after parallelism" spam when DataLoader uses multiprocessing.
+# This must be set before any `transformers`/`tokenizers` usage.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -29,6 +32,12 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
 from torch.utils.tensorboard import SummaryWriter
 from transformers import AutoTokenizer
+
+# Optional: HumanEval-style prompt+solution validation (completion-only LM CE).
+try:
+    import json as _json  # noqa: F401
+except Exception:  # pragma: no cover
+    _json = None  # type: ignore
 
 
 def get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps, min_lr_ratio=0.1):
@@ -224,6 +233,78 @@ def collate_fn(batch):
     }
 
 
+class HumanEvalPromptSolutionDataset(Dataset):
+    """
+    HumanEval JSONL (prompt + canonical_solution) for inference-aligned LM validation.
+
+    We compute LM CE on *completion tokens only* by masking prompt tokens to -100.
+    This gives a signal that correlates better with pass@1 than teacher-forced loss on full solutions.
+    """
+
+    def __init__(self, jsonl_path: str, tokenizer, max_length: int = 512):
+        super().__init__()
+        if not os.path.exists(jsonl_path):
+            raise FileNotFoundError(f"HumanEval JSONL not found: {jsonl_path}")
+        self.tokenizer = tokenizer
+        self.max_length = int(max_length)
+        self.rows: List[Tuple[str, str]] = []
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                prompt = str(obj.get("prompt", "") or "")
+                sol = str(obj.get("canonical_solution", "") or "")
+                if prompt.strip() and sol.strip():
+                    self.rows.append((prompt, sol))
+        print(f"[Dataset] Loaded {len(self.rows)} HumanEval prompt+solution pairs from {jsonl_path}")
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        prompt, sol = self.rows[idx]
+        full_text = f"{prompt}{sol}"
+        # Tokenize prompt separately to compute completion mask length under identical tokenizer settings.
+        enc_prompt = self.tokenizer(
+            prompt,
+            max_length=self.max_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+            add_special_tokens=False,
+        )
+        enc_full = self.tokenizer(
+            full_text,
+            max_length=self.max_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+            add_special_tokens=False,
+        )
+        input_ids = enc_full["input_ids"].squeeze(0)
+        attention_mask = enc_full["attention_mask"].squeeze(0)
+        # Prompt length is number of non-pad tokens in the prompt encoding (capped by max_length).
+        prompt_len = int(enc_prompt["attention_mask"].sum().item())
+        labels = input_ids.clone()
+        # Mask out prompt tokens and padding for completion-only CE.
+        if prompt_len > 0:
+            labels[:prompt_len] = -100
+        labels = labels.masked_fill(attention_mask == 0, -100)
+        return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
+
+
+def collate_lm_completion_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+    input_ids = torch.stack([x["input_ids"] for x in batch], dim=0)
+    attention_mask = torch.stack([x["attention_mask"] for x in batch], dim=0)
+    labels = torch.stack([x["labels"] for x in batch], dim=0)
+    return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
+
+
 def train_focused():
     """
     Focused training loop with only essential losses for span decoding.
@@ -287,6 +368,21 @@ def train_focused():
     parser.add_argument("--span_ss_p_gold_end", type=float, default=0.2, help="Scheduled sampling: ending probability of using gold span tokens as local-encoder input.")
     parser.add_argument("--span_ss_schedule_frac", type=float, default=0.5, help="Fraction of total optimizer steps over which p_gold anneals from start to end.")
     parser.add_argument("--span_ss_mode", type=str, default="per_span", choices=["off", "per_span"], help="Scheduled sampling mode for local encoder. 'per_span' samples gold-vs-model per span.")
+
+    # Local decoder free-run / self-conditioning (reduce teacher-forcing exposure bias).
+    # "teacher" = current behavior (BOS + gold[:-1]).
+    # "self_condition" = run one teacher-forced pass to get token predictions, then run a second pass where
+    # decoder inputs are BOS + predicted_tokens[:-1]. This approximates free-run generation but stays efficient.
+    parser.add_argument(
+        "--local_decoder_train_mode",
+        type=str,
+        default="self_condition",
+        choices=["teacher", "self_condition"],
+        help="Training mode for local decoder inputs. 'self_condition' reduces exposure bias by conditioning on the model's own predicted tokens.",
+    )
+    parser.add_argument("--local_decoder_self_condition_p_start", type=float, default=0.0, help="Start probability of using self-conditioning in local decoder training.")
+    parser.add_argument("--local_decoder_self_condition_p_end", type=float, default=1.0, help="End probability of using self-conditioning in local decoder training.")
+    parser.add_argument("--local_decoder_self_condition_schedule_frac", type=float, default=0.5, help="Fraction of total optimizer steps over which self-conditioning probability ramps from start to end.")
     # Train-time analogue of inference --disable_local_encoder_only:
     # drop span_memory cross-attn sometimes so the local decoder learns to rely on (span_latent + global_memory).
     # Default: ramp to 100% (drop all span_memory) by mid-training to align with inference-time missing span memory,
@@ -298,20 +394,25 @@ def train_focused():
     parser.add_argument(
         "--boundary_target_mode",
         type=str,
-        default="ast_start",
+        # IMPORTANT:
+        # - "ast_start" makes the boundary head fire on *every* AST span start => extremely high patch rate at inference.
+        # - "rewrite_worthy" gates positives to spans where the global model actually differs from gold (teacher-forced),
+        #   which aligns much better with patch-at-inference semantics.
+        default="rewrite_worthy",
         choices=["ast_start", "rewrite_worthy"],
         help="Boundary target mode. 'rewrite_worthy' trains boundary head to fire only on spans where global predictions differ from gold.",
     )
     parser.add_argument(
         "--boundary_rewrite_mismatch_threshold",
         type=float,
-        default=0.2,
+        default=0.35,
         help="In rewrite_worthy mode, mark a span boundary positive only if mismatch fraction > threshold.",
     )
     parser.add_argument(
         "--boundary_rewrite_min_span_len",
         type=int,
-        default=2,
+        # Align with inference: if we won't rewrite short spans, don't train boundary positives on them either.
+        default=8,
         help="In rewrite_worthy mode, only consider spans with at least this many tokens.",
     )
     # Boundary feature source: use multi-layer global representations to avoid relying only on last-layer next-token features.
@@ -359,6 +460,12 @@ def train_focused():
     parser.add_argument("--humaneval_parquet", type=str,
                         default="/data/home/zhangsj/Data/HumanEval/humaneval_ast_parsed.parquet",
                         help="Path to pre-parsed HumanEval parquet for validation")
+    parser.add_argument(
+        "--humaneval_jsonl",
+        type=str,
+        default="/data/home/zhangsj/Data/HumanEval/human-eval-v2-20210705.jsonl",
+        help="Optional: HumanEval JSONL for completion-only LM validation (prompt+canonical_solution).",
+    )
     parser.add_argument("--eval_every_n_epochs", type=int, default=1, help="Run validation every N epochs")
     
     # Checkpoint loading
@@ -390,6 +497,7 @@ def train_focused():
     
     # Handle validation dataset
     val_dataset = None
+    lm_val_dataset = None
     
     # Option 1: Use pre-parsed HumanEval parquet (default)
     if args.humaneval_parquet and os.path.exists(args.humaneval_parquet):
@@ -410,6 +518,18 @@ def train_focused():
         train_len = total_len - val_len
         dataset, val_dataset = random_split(dataset, [train_len, val_len])
         print(f"[Dataset] Train/val split: {train_len} train, {val_len} val")
+
+    # Optional LM completion-only validation on HumanEval JSONL (inference-aligned loss).
+    if args.humaneval_jsonl and os.path.exists(args.humaneval_jsonl):
+        try:
+            lm_val_dataset = HumanEvalPromptSolutionDataset(
+                args.humaneval_jsonl,
+                tokenizer,
+                max_length=args.max_length,
+            )
+        except Exception as e:
+            print(f"[Dataset] Warning: could not build HumanEval JSONL LM val dataset: {e}")
+            lm_val_dataset = None
     
     # Prepare boundary class weights if specified
     boundary_class_weight_tensor = None
@@ -659,6 +779,20 @@ def train_focused():
             persistent_workers=True if val_num_workers > 0 else False,
         )
         print(f"[DataLoader] Validation: {len(val_dataloader)} batches")
+
+    lm_val_dataloader = None
+    if lm_val_dataset is not None:
+        lm_val_num_workers = 0  # keep 0 to avoid fork warnings; dataset is tiny anyway
+        lm_val_dataloader = DataLoader(
+            lm_val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=lm_val_num_workers,
+            pin_memory=torch.cuda.is_available(),
+            collate_fn=collate_lm_completion_fn,
+            drop_last=False,
+        )
+        print(f"[DataLoader] HumanEval JSONL LM val: {len(lm_val_dataloader)} batches")
     
     # Optimizer
     if len(trainable_params) == 0:
@@ -813,6 +947,33 @@ def train_focused():
             avg_val[k] = float((val_sum[k] / denom).item())
         print(f"\n[Val Epoch {epoch_num}] total={avg_val['total']:.4f}, lm_ce={avg_val['lm_ce']:.4f}, node_recon={avg_val['node_recon']:.4f}, boundary={avg_val['boundary']:.4f}, latent_mse={avg_val['latent_mse']:.4f}")
         return avg_val
+
+    @torch.no_grad()
+    def run_lm_completion_validation(val_loader, epoch_num):
+        """
+        Compute completion-only LM CE on HumanEval prompt+solution JSONL.
+        This is closer to inference than teacher-forced loss on full solutions.
+        """
+        adapter.eval()
+        total = torch.zeros((), device=device, dtype=torch.float32)
+        count = 0
+        for batch in val_loader:
+            input_ids = batch["input_ids"].to(device, non_blocking=True)
+            attention_mask = batch["attention_mask"].to(device, non_blocking=True)
+            labels = batch["labels"].to(device, non_blocking=True)
+            out = adapter(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+            )
+            # out.loss is already the masked CE over non -100 labels (completion-only + non-pad).
+            if hasattr(out, "loss") and out.loss is not None:
+                total = total + out.loss.detach().float()
+                count += 1
+        adapter.train()
+        avg = float((total / max(1, count)).item())
+        print(f"\n[Val Epoch {epoch_num}] HumanEval completion-only LM CE: {avg:.4f}")
+        return avg
     
     # Determine starting epoch and global_step for resume
     start_epoch = 0
@@ -873,6 +1034,7 @@ def train_focused():
     # Store loss tensors instead of converting to float immediately to avoid CPU-GPU sync
     accumulated_loss_tensor = torch.tensor(0.0, device=device, dtype=dtype)
     accumulated_optimizer_steps = 0  # Number of optimizer steps accumulated into accumulated_loss_tensor
+    last_logged_step = global_step  # Track last logged step to ensure logging happens every 50 steps regardless of resume
     
     for epoch in range(start_epoch, args.epochs):
         # Keep running sums on GPU (constant memory). Avoid storing per-batch CUDA tensors.
@@ -915,6 +1077,23 @@ def train_focused():
                 # Safe fallback: use gold spans
                 adapter.span_ss_mode = "off"
                 adapter.span_ss_p_gold = 1.0
+
+            # Local-decoder self-conditioning schedule (train analogue of free-run generation).
+            # We keep it as a probability so you can ramp it in later training.
+            try:
+                adapter.local_decoder_train_mode = str(getattr(args, "local_decoder_train_mode", "teacher"))
+                if adapter.local_decoder_train_mode == "self_condition":
+                    p0 = float(getattr(args, "local_decoder_self_condition_p_start", 0.0))
+                    p1 = float(getattr(args, "local_decoder_self_condition_p_end", 1.0))
+                    frac = float(getattr(args, "local_decoder_self_condition_schedule_frac", 0.5))
+                    ramp_steps = max(1, int(frac * max(1, int(total_optimizer_steps))))
+                    prog = min(1.0, float(global_step) / float(ramp_steps))
+                    adapter.local_decoder_self_condition_p = p0 + prog * (p1 - p0)
+                else:
+                    adapter.local_decoder_self_condition_p = 0.0
+            except Exception:
+                adapter.local_decoder_train_mode = "teacher"
+                adapter.local_decoder_self_condition_p = 0.0
 
             # Span-memory dropout schedule (train analogue of inference disable_local_encoder_only)
             try:
@@ -1032,7 +1211,8 @@ def train_focused():
                 accumulated_optimizer_steps += 1
                 
                 # Compute average loss over accumulated steps (only convert to float when logging)
-                should_log = (global_step % 50 == 0)
+                # Log every 50 steps from last logged step (handles resume correctly)
+                should_log = (global_step - last_logged_step >= 50)
                 if should_log:
                     # NOTE:
                     # - accumulated_loss_tensor includes (optimizer_steps * gradient_accumulation_steps) microbatches since last log.
@@ -1159,6 +1339,8 @@ def train_focused():
                     if hasattr(outputs, 'type_probe_decoder_acc'):
                         msg += f" | probe_dec_acc {float(outputs.type_probe_decoder_acc.item()):.3f}"
                     print(msg)
+                    # Update last logged step after successful logging
+                    last_logged_step = global_step
         
         # Epoch summary - convert tensors to floats only at epoch end
         def _avg(k: str) -> float:
@@ -1187,6 +1369,10 @@ def train_focused():
             writer.add_scalar("val/node_recon_loss", val_metrics['node_recon'], epoch)
             writer.add_scalar("val/boundary_loss", val_metrics['boundary'], epoch)
             writer.add_scalar("val/latent_mse_loss", val_metrics['latent_mse'], epoch)
+
+        if lm_val_dataloader is not None and (epoch + 1) % args.eval_every_n_epochs == 0:
+            lm_ce = run_lm_completion_validation(lm_val_dataloader, epoch + 1)
+            writer.add_scalar("val_completion_only/lm_ce", lm_ce, epoch)
         
         # Save checkpoint
         save_dir = os.path.join(args.output_dir, f"epoch_{epoch+1}")

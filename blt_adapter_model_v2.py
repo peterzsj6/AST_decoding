@@ -444,6 +444,10 @@ class BLTAdapterModel(nn.Module):
 
         # Learned patch boundary head (binary classification: 1=start/single; 0=otherwise)
         self.boundary_head = nn.Linear(self.hidden_size, 2)
+        # Optional boundary reweighting / focal loss (configured by training script)
+        # - boundary_class_weight: Tensor[2] weights for classes [0,1]
+        # - boundary_focal_gamma: float focal gamma (0 disables)
+        self.boundary_focal_gamma = float(getattr(config, "boundary_focal_gamma", 0.0))
         # Latent-from-global projector to predict span latent from global hidden at boundary
         self.latent_from_global = nn.Sequential(
             nn.Linear(self.hidden_size, self.hidden_size * 2),
@@ -644,10 +648,25 @@ class BLTAdapterModel(nn.Module):
                 # Mask to valid positions
                 mask = attention_mask.to(torch.bool) if attention_mask is not None else torch.ones_like(boundary_targets, dtype=torch.bool, device=boundary_targets.device)
                 logits = self.boundary_head(last_hidden_for_heads)  # [B, L, 2]
-                ce_loss = F.cross_entropy(
-                    logits[mask].view(-1, 2),
-                    boundary_targets[mask].view(-1),
-                )
+                logits_flat = logits[mask].view(-1, 2)
+                targets_flat = boundary_targets[mask].view(-1)
+                # Optional class weighting (to handle imbalance): weights [w0, w1]
+                weight = getattr(self, "boundary_class_weight", None)
+                if isinstance(weight, torch.Tensor):
+                    weight = weight.to(device=logits_flat.device, dtype=torch.float32)
+                else:
+                    weight = None
+                gamma = float(getattr(self, "boundary_focal_gamma", 0.0) or 0.0)
+                if gamma > 0.0:
+                    # Focal loss: (1-pt)^gamma * CE
+                    log_probs = F.log_softmax(logits_flat, dim=-1)  # [N,2]
+                    probs = log_probs.exp()
+                    pt = probs.gather(1, targets_flat.unsqueeze(1)).squeeze(1).clamp_min(1e-8)  # [N]
+                    ce_vec = F.nll_loss(log_probs, targets_flat, weight=weight, reduction="none")  # [N]
+                    focal = (1.0 - pt).pow(gamma)
+                    ce_loss = (focal * ce_vec).mean()
+                else:
+                    ce_loss = F.cross_entropy(logits_flat, targets_flat, weight=weight)
                 # Metrics for monitoring
                 try:
                     with torch.no_grad():
@@ -1063,14 +1082,74 @@ class BLTAdapterModel(nn.Module):
             # When gate -> 0: output is dominated by local decoder (good for multi-token)
             dec_out_teacher = (1 - gate) * dec_out_teacher + gate * self.global_residual_scale * global_hidden_expanded
         
-        logits_teacher = self.local_out_proj(dec_out_teacher)  # [N, L, V]
-        vocab = logits_teacher.size(-1)
-        # Teacher CE for monitoring only
-        teacher_ce = F.cross_entropy(
-            logits_teacher.view(-1, vocab),
-            torch.where(mask_batch.view(-1), tgt_batch.view(-1), torch.full_like(tgt_batch.view(-1), -100)),
-            ignore_index=-100
-        )
+        # === Memory-safe CE / argmax helpers ===
+        # NOTE: vocab is large (~150k), so materializing full [N,L,V] logits can OOM on "span-heavy" batches.
+        # We avoid that by computing on valid positions only (mask_batch) and chunking the projection.
+        weight = self.local_out_proj.weight  # [V,H]
+        bias = self.local_out_proj.bias      # [V] or None
+        vocab = int(weight.size(0))
+
+        def _chunked_ce_from_hidden(hidden_valid: torch.Tensor, targets_valid: torch.Tensor, chunk_tokens: Optional[int] = None) -> torch.Tensor:
+            # hidden_valid: [M,H], targets_valid: [M]
+            if chunk_tokens is None:
+                chunk_tokens = int(getattr(self, "node_ce_chunk_tokens", 256))
+            total = torch.zeros((), device=hidden_valid.device, dtype=torch.float32)
+            count = 0
+            M = int(hidden_valid.size(0))
+            for s in range(0, M, chunk_tokens):
+                e = min(M, s + chunk_tokens)
+                logits = F.linear(hidden_valid[s:e], weight, bias)  # [c,V]
+                # Use sum reduction to avoid accumulating large intermediate tensors.
+                total = total + F.cross_entropy(logits, targets_valid[s:e], reduction="sum")
+                count += (e - s)
+            return (total / max(1, count)).to(dtype=hidden_valid.dtype)
+
+        def _full_ce_from_hidden(hidden_valid: torch.Tensor, targets_valid: torch.Tensor) -> torch.Tensor:
+            logits = F.linear(hidden_valid, weight, bias)  # [M,V]
+            return F.cross_entropy(logits, targets_valid).to(dtype=hidden_valid.dtype)
+
+        def _chunked_argmax_from_hidden(hidden: torch.Tensor, chunk_tokens: Optional[int] = None) -> torch.Tensor:
+            # hidden: [...,H] -> ids: [...]
+            if chunk_tokens is None:
+                chunk_tokens = int(getattr(self, "node_argmax_chunk_tokens", 128))
+            h = hidden.reshape(-1, hidden.size(-1))
+            out = torch.empty((h.size(0),), device=h.device, dtype=torch.long)
+            M = int(h.size(0))
+            for s in range(0, M, chunk_tokens):
+                e = min(M, s + chunk_tokens)
+                logits = F.linear(h[s:e], weight, bias)  # [c,V]
+                out[s:e] = torch.argmax(logits, dim=-1)
+            return out.view(hidden.shape[:-1])
+
+        def _full_argmax_from_hidden(hidden: torch.Tensor) -> torch.Tensor:
+            h = hidden.reshape(-1, hidden.size(-1))
+            logits = F.linear(h, weight, bias)  # [M,V]
+            ids = torch.argmax(logits, dim=-1)
+            return ids.view(hidden.shape[:-1])
+
+        def _choose_mode(valid_tokens: int) -> str:
+            mode = str(getattr(self, "node_logits_mode", "chunked"))
+            if mode == "auto":
+                mx = int(getattr(self, "node_full_logits_max_tokens", 4096))
+                return "full" if valid_tokens <= mx else "chunked"
+            return mode
+
+        # Teacher CE for monitoring only (compute only on valid positions)
+        hidden_teacher_valid = dec_out_teacher[mask_batch]  # [M,H]
+        targets_valid = tgt_batch[mask_batch].to(dtype=torch.long)  # [M]
+        # teacher_ce is monitoring-only; optionally disable or cap tokens for speed.
+        if bool(getattr(self, "node_compute_teacher_ce", False)):
+            max_t = int(getattr(self, "node_teacher_ce_max_tokens", 1024))
+            if hidden_teacher_valid.size(0) > max_t:
+                hidden_teacher_valid_ce = hidden_teacher_valid[:max_t]
+                targets_valid_ce = targets_valid[:max_t]
+            else:
+                hidden_teacher_valid_ce = hidden_teacher_valid
+                targets_valid_ce = targets_valid
+            mode_t = _choose_mode(int(hidden_teacher_valid_ce.size(0)))
+            teacher_ce = _full_ce_from_hidden(hidden_teacher_valid_ce, targets_valid_ce) if mode_t == "full" else _chunked_ce_from_hidden(hidden_teacher_valid_ce, targets_valid_ce, chunk_tokens=None)
+        else:
+            teacher_ce = torch.zeros((), device=device, dtype=hidden_teacher_valid.dtype)
 
         aux_losses: Dict[str, torch.Tensor] = {}
         # Student path: predicted latent via last_hidden_for_heads (if available)
@@ -1080,35 +1159,100 @@ class BLTAdapterModel(nn.Module):
         if isinstance(last_hidden_for_heads, torch.Tensor):
             # Use predicted span latents derived from global hidden state at span starts
             student_span_latent = self.latent_proj(pred_latents_batch).unsqueeze(1)  # [N,1,H]
-            dec_out_student = self.local_decoder(
-                tok_emb,
-                student_span_latent,
-                span_memory=span_mem_batch,
-                span_key_padding_mask=span_kpm,
-                global_memory=global_mem_batch,
-                global_key_padding_mask=global_kpm,
-            )  # [N,L,H]
-            
-            # Apply same residual connection for student path
-            if hasattr(self, 'global_residual_gate') and hasattr(self, 'global_residual_scale'):
-                global_hidden_expanded = global_hiddens_batch.unsqueeze(1).expand_as(dec_out_student)
-                gate_input = torch.cat([dec_out_student, global_hidden_expanded], dim=-1)
-                gate = self.global_residual_gate(gate_input)
-                dec_out_student = (1 - gate) * dec_out_student + gate * self.global_residual_scale * global_hidden_expanded
-            
-            logits_student = self.local_out_proj(dec_out_student)  # [N,L,V]
-            # Next-token CE from predicted latent (PRIMARY training loss)
-            gen_ce = F.cross_entropy(
-                logits_student.view(-1, vocab),
-                torch.where(mask_batch.view(-1), tgt_batch.view(-1), torch.full_like(tgt_batch.view(-1), -100)),
-                ignore_index=-100
-            )
+            # Optional: local-decoder self-conditioning to reduce exposure bias.
+            # If enabled, we do:
+            #   1) teacher-forced pass (no_grad) to get token predictions
+            #   2) second pass where decoder inputs are BOS + predicted_tokens[:-1]
+            #      and compute CE on the same targets
+            train_mode = str(getattr(self, "local_decoder_train_mode", "teacher"))
+            p_sc = float(getattr(self, "local_decoder_self_condition_p", 0.0) or 0.0)
+            use_sc = bool(train_mode == "self_condition" and p_sc > 0.0)
+            if use_sc:
+                try:
+                    # Batch-level stochastic gating (simpler + efficient)
+                    use_sc = bool(torch.rand((), device=device).item() < p_sc)
+                except Exception:
+                    use_sc = False
+
+            def _apply_residual(x: torch.Tensor) -> torch.Tensor:
+                if hasattr(self, 'global_residual_gate') and hasattr(self, 'global_residual_scale'):
+                    global_hidden_expanded = global_hiddens_batch.unsqueeze(1).expand_as(x)
+                    gate_input = torch.cat([x, global_hidden_expanded], dim=-1)
+                    gate = self.global_residual_gate(gate_input)
+                    x = (1 - gate) * x + gate * self.global_residual_scale * global_hidden_expanded
+                return x
+
+            if use_sc:
+                with torch.no_grad():
+                    dec_first = self.local_decoder(
+                        tok_emb,
+                        student_span_latent,
+                        span_memory=span_mem_batch,
+                        span_key_padding_mask=span_kpm,
+                        global_memory=global_mem_batch,
+                        global_key_padding_mask=global_kpm,
+                    )  # [N,L,H]
+                    dec_first = _apply_residual(dec_first)
+                    m_tokens = int(dec_first.numel() // max(1, dec_first.size(-1)))
+                    mode_a = _choose_mode(m_tokens)
+                    pred_ids = _full_argmax_from_hidden(dec_first) if mode_a == "full" else _chunked_argmax_from_hidden(dec_first, chunk_tokens=None)  # [N,L]
+
+                # Build self-conditioned decoder inputs: BOS + pred[:-1], keep padding beyond each node length.
+                pad_id = int(self.config.pad_token_id) if getattr(self.config, "pad_token_id", None) is not None else 0
+                bos_id = int(getattr(self, "node_bos_id", 0))
+                inp_sc = torch.full_like(inp_batch, fill_value=pad_id)
+                inp_sc[:, 0] = bos_id
+                if inp_batch.size(1) > 1:
+                    inp_sc[:, 1:] = pred_ids[:, :-1]
+                # Mask off positions beyond each node's true input length (== number of target tokens)
+                lengths = mask_batch.sum(dim=1).to(dtype=torch.long)  # [N]
+                pos = torch.arange(inp_batch.size(1), device=device, dtype=torch.long).unsqueeze(0)  # [1,L]
+                keep = pos < lengths.unsqueeze(1)  # [N,L]
+                inp_sc = torch.where(keep, inp_sc, torch.full_like(inp_sc, pad_id))
+
+                tok_emb_sc = self.local_token_embed(inp_sc)
+                dec_out_student = self.local_decoder(
+                    tok_emb_sc,
+                    student_span_latent,
+                    span_memory=span_mem_batch,
+                    span_key_padding_mask=span_kpm,
+                    global_memory=global_mem_batch,
+                    global_key_padding_mask=global_kpm,
+                )  # [N,L,H]
+                dec_out_student = _apply_residual(dec_out_student)
+                hidden_student_valid = dec_out_student[mask_batch]  # [M,H]
+                mode_s = _choose_mode(int(hidden_student_valid.size(0)))
+                gen_ce = _full_ce_from_hidden(hidden_student_valid, targets_valid) if mode_s == "full" else _chunked_ce_from_hidden(hidden_student_valid, targets_valid, chunk_tokens=None)
+            else:
+                dec_out_student = self.local_decoder(
+                    tok_emb,
+                    student_span_latent,
+                    span_memory=span_mem_batch,
+                    span_key_padding_mask=span_kpm,
+                    global_memory=global_mem_batch,
+                    global_key_padding_mask=global_kpm,
+                )  # [N,L,H]
+                dec_out_student = _apply_residual(dec_out_student)
+                hidden_student_valid = dec_out_student[mask_batch]  # [M,H]
+                mode_s = _choose_mode(int(hidden_student_valid.size(0)))
+                gen_ce = _full_ce_from_hidden(hidden_student_valid, targets_valid) if mode_s == "full" else _chunked_ce_from_hidden(hidden_student_valid, targets_valid, chunk_tokens=None)
+
             recon_loss = gen_ce
             # KL between student and teacher on valid positions
             if kl_weight > 0:
                 try:
-                    log_p_student = F.log_softmax(logits_student[mask_batch], dim=-1)
-                    p_teacher = F.softmax(logits_teacher[mask_batch].detach(), dim=-1)
+                    # KL requires full distributions => expensive for large vocab.
+                    # Keep it disabled by default (kl_weight=0) for stability/memory.
+                    # If enabled, compute on a small subset of tokens to avoid OOM.
+                    max_kl_tokens = int(getattr(self, "max_kl_tokens", 256))
+                    idx = torch.nonzero(mask_batch, as_tuple=False).view(-1)
+                    if idx.numel() > max_kl_tokens:
+                        idx = idx[:max_kl_tokens]
+                    # Gather a subset of hidden states
+                    ht_s = dec_out_student[mask_batch].reshape(-1, self.hidden_size)[: idx.numel()]
+                    ht_t = dec_out_teacher[mask_batch].reshape(-1, self.hidden_size)[: idx.numel()]
+                    log_p_student = F.log_softmax(F.linear(ht_s, weight, bias), dim=-1)
+                    p_teacher = F.softmax(F.linear(ht_t.detach(), weight, bias), dim=-1)
                     kl = F.kl_div(log_p_student, p_teacher, reduction='batchmean')
                     aux_losses['kl_loss'] = kl
                 except Exception:
@@ -1380,12 +1524,16 @@ def create_blt_adapter_model(
     local_dropout: float = 0.1,
     max_node_length: int = 64,
     num_node_types: Optional[int] = None,
+    attn_implementation: Optional[str] = None,
 ) -> BLTAdapterModel:
     """
     Load any AutoModelForCausalLM from model_path, wrap with BLTAdapterModel,
     and copy base embeddings to the local encoder.
     """
-    base_model = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True)
+    extra_kwargs = {}
+    if attn_implementation is not None:
+        extra_kwargs["attn_implementation"] = attn_implementation
+    base_model = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True, **extra_kwargs)
     config = base_model.config
     
     # Store base model path in config for checkpoint saving
