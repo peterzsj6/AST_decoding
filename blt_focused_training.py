@@ -12,7 +12,7 @@ No LM CE, KL, or InfoNCE losses - just the essentials for span decoding.
 from typing import Dict, List, Optional, Tuple
 import os
 if 'LOCAL_RANK' not in os.environ:
-    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '7'
 # Avoid HuggingFace tokenizer's "forked after parallelism" spam when DataLoader uses multiprocessing.
 # This must be set before any `transformers`/`tokenizers` usage.
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -319,7 +319,7 @@ def train_focused():
     parser.add_argument("--max_length", type=int, default=328)
     parser.add_argument("--dtype", type=str, default="auto", choices=["auto", "bf16", "fp16", "fp32"])
     parser.add_argument("--log_dir", type=str, default=None)
-    parser.add_argument("--trial_name", type=str, default="focused_rewrite_encoder_parallel_0.4LMCE_0MSE_1.0NONE_over0.9_midlayer_boundary")
+    parser.add_argument("--trial_name", type=str, default="test_1")
     
     # Span filtering
     parser.add_argument("--min_span_len", type=int, default=1, help="Minimum span length in tokens")
@@ -977,6 +977,8 @@ def train_focused():
     
     # Determine starting epoch and global_step for resume
     start_epoch = 0
+    # Must be defined even when not resuming
+    saved_global_step = None
     if args.resume_from and os.path.isdir(args.resume_from):
         # Extract epoch number from checkpoint path (e.g., ".../epoch_2" -> 2)
         match = re.search(r'epoch_(\d+)(?:\/|$)', args.resume_from)
@@ -1010,7 +1012,6 @@ def train_focused():
                 print(f"[setup] Warning: Could not load scheduler state: {e}")
         
         # Load training state (global_step, etc.)
-        saved_global_step = None
         if os.path.exists(training_state_path):
             try:
                 training_state = torch.load(training_state_path, map_location="cpu")

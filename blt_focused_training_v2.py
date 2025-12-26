@@ -318,13 +318,13 @@ def train_focused():
     parser.add_argument("--model_path", type=str, default="/data/home/zhangsj/deepseek_qwen1.5_distill")
     parser.add_argument("--parquet", type=str, default="/data/home/zhangsj/Data/more_big_code_language/python/deepseek_qwen1.5_python_ast.Parquet")
     parser.add_argument("--output_dir", type=str, default=None)
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=3e-5)
     parser.add_argument("--max_length", type=int, default=328)
     parser.add_argument("--dtype", type=str, default="auto", choices=["auto", "bf16", "fp16", "fp32"])
     parser.add_argument("--log_dir", type=str, default=None)
-    parser.add_argument("--trial_name", type=str, default="focused_deepseek_distill_blt_v2")
+    parser.add_argument("--trial_name", type=str, default="deepseek_distill_blt_v2")
     # Attention backend: pass into HF model loading if supported (Transformers 4.36+).
     parser.add_argument("--attn_implementation", type=str, default="sdpa", choices=["sdpa", "eager"],
                         help="Attention implementation for HF models. 'sdpa' enables PyTorch SDPA backend.")
@@ -356,7 +356,7 @@ def train_focused():
     parser.add_argument("--warmup_mse_weight", type=float, default=0.0)
     
     # Gradient accumulation for effective larger batch
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=2)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     
     # LR Scheduler
     parser.add_argument("--lr_scheduler", type=str, default="cosine", choices=["none", "cosine", "linear"],
@@ -367,9 +367,9 @@ def train_focused():
     # Local decoder configuration
     parser.add_argument("--local_num_layers", type=int, default=2, help="Number of local decoder layers")
     # Chunking for local decoder projection to vocab (memory/speed tradeoff)
-    parser.add_argument("--node_ce_chunk_tokens", type=int, default=1024,
+    parser.add_argument("--node_ce_chunk_tokens", type=int, default=318,
                         help="Chunk size (#token positions) when projecting local-decoder hidden states to vocab for CE. Larger=faster, more VRAM.")
-    parser.add_argument("--node_argmax_chunk_tokens", type=int, default=1024,
+    parser.add_argument("--node_argmax_chunk_tokens", type=int, default=318,
                         help="Chunk size (#token positions) when computing argmax over vocab for self-conditioning. Larger=faster, more VRAM.")
     parser.add_argument("--node_logits_mode", type=str, default="auto", choices=["auto", "full", "chunked"],
                         help="How to compute local-decoder vocab projection for CE/argmax. 'full' is fastest but can OOM on span-heavy batches. 'auto' uses full below a token threshold.")
@@ -388,7 +388,7 @@ def train_focused():
     parser.add_argument(
         "--local_decoder_train_mode",
         type=str,
-        default="self_condition",
+        default="teacher",
         choices=["teacher", "self_condition"],
         help="Training mode for local decoder inputs. 'self_condition' reduces exposure bias by conditioning on the model's own predicted tokens.",
     )
@@ -414,6 +414,20 @@ def train_focused():
     
     # Checkpoint loading
     parser.add_argument("--resume_from", type=str, default=None, help="Resume from checkpoint directory")
+
+    # Extra checkpointing (useful early on)
+    parser.add_argument(
+        "--save_first_epoch_every_frac",
+        type=float,
+        default=0.25,
+        help="During the first epoch of this run, save extra checkpoints every this fraction of an epoch (e.g. 0.2 => 5 saves: 0.2/0.4/0.6/0.8/1.0). Set <=0 to disable.",
+    )
+    parser.add_argument(
+        "--save_first_epoch_max_extra",
+        type=int,
+        default=4,
+        help="Maximum number of *extra* mid-epoch saves during the first epoch (not counting the normal end-of-epoch save).",
+    )
     
     args = parser.parse_args()
     
@@ -833,8 +847,84 @@ def train_focused():
     accumulated_loss_tensor = torch.tensor(0.0, device=device, dtype=dtype)
     accumulated_optimizer_steps = 0
     print(f"[setup] Starting from epoch {start_epoch}, global_step={global_step}, steps_per_epoch={steps_per_epoch}")
+
+    def save_checkpoint_dir(save_dir: str, *, epoch_num: int, global_step_num: int) -> None:
+        os.makedirs(save_dir, exist_ok=True)
+        # === Save EVERYTHING (base model + adapter) ===
+        # We save the base model into a subdir and point adapter.config.base_model_path at it.
+        # This ensures future `BLTAdapterModel.from_pretrained(save_dir)` reloads the exact trained base weights.
+        try:
+            base_save_dir = os.path.join(save_dir, "base_model")
+            os.makedirs(base_save_dir, exist_ok=True)
+            base_model = getattr(adapter, "base_model", None)
+            if base_model is None:
+                raise RuntimeError("adapter.base_model is missing; cannot save full model")
+
+            # Save full base model weights/config (this can be large!)
+            base_model.save_pretrained(base_save_dir, safe_serialization=False)
+
+            # Point adapter config to the saved base model snapshot (use absolute path for robustness)
+            try:
+                adapter.config.base_model_path = os.path.abspath(base_save_dir)
+            except Exception:
+                pass
+
+            # Save adapter-specific weights/config (adapter.save_pretrained already excludes base_model.*)
+            adapter.save_pretrained(save_dir, safe_serialization=False)
+        except RuntimeError as e:
+            if "shared tensors" in str(e):
+                # Fallback: still save *everything* via explicit torch.save, plus base model snapshot.
+                print(f"[save] Using torch.save fallback due to tied/shared tensors: {e}")
+                base_save_dir = os.path.join(save_dir, "base_model")
+                os.makedirs(base_save_dir, exist_ok=True)
+                base_model = getattr(adapter, "base_model", None)
+                if base_model is None:
+                    raise
+                base_model.save_pretrained(base_save_dir, safe_serialization=False)
+                try:
+                    adapter.config.base_model_path = os.path.abspath(base_save_dir)
+                except Exception:
+                    pass
+                torch.save(adapter.state_dict(), os.path.join(save_dir, "pytorch_model.bin"))
+                try:
+                    adapter.config.save_pretrained(save_dir)
+                except Exception:
+                    pass
+            else:
+                raise
+
+        tokenizer.save_pretrained(save_dir)
+        # Save optimizer / scheduler / training state for resume
+        try:
+            torch.save(opt.state_dict(), os.path.join(save_dir, "optimizer.pt"))
+        except Exception as e:
+            print(f"[save] Warning: Could not save optimizer state: {e}")
+        if scheduler is not None:
+            try:
+                torch.save(scheduler.state_dict(), os.path.join(save_dir, "scheduler.pt"))
+            except Exception as e:
+                print(f"[save] Warning: Could not save scheduler state: {e}")
+        try:
+            torch.save({"global_step": int(global_step_num), "epoch": int(epoch_num)}, os.path.join(save_dir, "training_state.pt"))
+        except Exception as e:
+            print(f"[save] Warning: Could not save training state: {e}")
+        print(f"Saved checkpoint to {save_dir}")
     
     for epoch in range(start_epoch, args.epochs):
+        epoch_start_global_step = int(global_step)
+
+        # Extra checkpoint schedule for the first epoch of this run
+        extra_save_enabled = (epoch == start_epoch) and (float(getattr(args, "save_first_epoch_every_frac", 0.0)) > 0.0)
+        extra_interval_steps = None
+        next_extra_save_step = None
+        extra_saves_done = 0
+        extra_saves_max = int(getattr(args, "save_first_epoch_max_extra", 4))
+        if extra_save_enabled:
+            frac = float(getattr(args, "save_first_epoch_every_frac", 0.2))
+            extra_interval_steps = max(1, int(round(frac * float(max(1, steps_per_epoch)))))
+            next_extra_save_step = epoch_start_global_step + extra_interval_steps
+            print(f"[setup] First-epoch extra checkpointing: every {frac:.2f} epoch ~= {extra_interval_steps} optimizer steps (max_extra={extra_saves_max})")
+
         epoch_sum = {
             'total': torch.zeros((), device=device, dtype=torch.float32),
             'lm_ce': torch.zeros((), device=device, dtype=torch.float32),
@@ -970,6 +1060,22 @@ def train_focused():
                 global_step += 1
                 accumulated_optimizer_steps += 1
 
+                # Extra checkpoints during the first epoch (e.g., 0.2/0.4/0.6/0.8)
+                if extra_save_enabled and next_extra_save_step is not None and extra_interval_steps is not None:
+                    # Only mid-epoch: avoid duplicating the normal end-of-epoch save.
+                    epoch_end_step = epoch_start_global_step + int(steps_per_epoch)
+                    while (
+                        int(global_step) >= int(next_extra_save_step)
+                        and int(next_extra_save_step) < int(epoch_end_step)
+                        and extra_saves_done < extra_saves_max
+                    ):
+                        frac_done = float(int(next_extra_save_step) - epoch_start_global_step) / float(max(1, steps_per_epoch))
+                        tag = f"epoch_{epoch+1}_p{int(round(frac_done*100)):02d}_step_{int(next_extra_save_step)}"
+                        save_dir = os.path.join(args.output_dir, tag)
+                        save_checkpoint_dir(save_dir, epoch_num=epoch + 1, global_step_num=int(next_extra_save_step))
+                        extra_saves_done += 1
+                        next_extra_save_step = int(next_extra_save_step) + int(extra_interval_steps)
+
                 should_log = (global_step - last_logged_step >= 50)
                 if should_log:
                     denom = max(1, int(accumulated_optimizer_steps) * int(args.gradient_accumulation_steps))
@@ -1077,34 +1183,7 @@ def train_focused():
         
         # Save checkpoint
         save_dir = os.path.join(args.output_dir, f"epoch_{epoch+1}")
-        os.makedirs(save_dir, exist_ok=True)
-        try:
-            # Try standard save first
-            adapter.save_pretrained(save_dir, safe_serialization=False)
-        except RuntimeError as e:
-            if "shared tensors" in str(e):
-                # Workaround for tied weights issue
-                print(f"[save] Using torch.save fallback due to tied weights")
-                torch.save(adapter.state_dict(), os.path.join(save_dir, "pytorch_model.bin"))
-                adapter.config.save_pretrained(save_dir)
-            else:
-                raise
-        tokenizer.save_pretrained(save_dir)
-        # Save optimizer / scheduler / training state for resume
-        try:
-            torch.save(opt.state_dict(), os.path.join(save_dir, "optimizer.pt"))
-        except Exception as e:
-            print(f"[save] Warning: Could not save optimizer state: {e}")
-        if scheduler is not None:
-            try:
-                torch.save(scheduler.state_dict(), os.path.join(save_dir, "scheduler.pt"))
-            except Exception as e:
-                print(f"[save] Warning: Could not save scheduler state: {e}")
-        try:
-            torch.save({"global_step": global_step, "epoch": epoch + 1}, os.path.join(save_dir, "training_state.pt"))
-        except Exception as e:
-            print(f"[save] Warning: Could not save training state: {e}")
-        print(f"Saved checkpoint to {save_dir}")
+        save_checkpoint_dir(save_dir, epoch_num=epoch + 1, global_step_num=int(global_step))
     
     writer.add_text("training/status", "COMPLETED", global_step)
     writer.close()
