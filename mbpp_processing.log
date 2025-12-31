@@ -1,0 +1,72 @@
+Loading MBPP dataset from /data/home/zhangsj/Data/MBPP/mbpp.jsonl...
+Loaded 974 MBPP tasks
+Processing task 1/974: MBPP/1
+Processing task 50/974: MBPP/50
+  Success: Generated 29 AST spans
+Progress: 50/974 processed (Success: 50, Errors: 0)
+Processing task 100/974: MBPP/100
+  Success: Generated 29 AST spans
+Progress: 100/974 processed (Success: 100, Errors: 0)
+Processing task 150/974: MBPP/150
+  Success: Generated 43 AST spans
+Progress: 150/974 processed (Success: 150, Errors: 0)
+Processing task 200/974: MBPP/200
+  Success: Generated 25 AST spans
+Progress: 200/974 processed (Success: 200, Errors: 0)
+Processing task 250/974: MBPP/250
+  Success: Generated 33 AST spans
+Progress: 250/974 processed (Success: 250, Errors: 0)
+Processing task 300/974: MBPP/300
+  Success: Generated 51 AST spans
+Progress: 300/974 processed (Success: 300, Errors: 0)
+Processing task 350/974: MBPP/350
+  Success: Generated 64 AST spans
+Progress: 350/974 processed (Success: 350, Errors: 0)
+Processing task 400/974: MBPP/400
+  Success: Generated 17 AST spans
+Progress: 400/974 processed (Success: 400, Errors: 0)
+Processing task 450/974: MBPP/450
+  Success: Generated 22 AST spans
+Progress: 450/974 processed (Success: 450, Errors: 0)
+Processing task 500/974: MBPP/500
+  Success: Generated 24 AST spans
+Progress: 500/974 processed (Success: 500, Errors: 0)
+Processing task 550/974: MBPP/550
+  Success: Generated 118 AST spans
+Progress: 550/974 processed (Success: 550, Errors: 0)
+Processing task 600/974: MBPP/600
+  Success: Generated 24 AST spans
+Progress: 600/974 processed (Success: 600, Errors: 0)
+Processing task 650/974: MBPP/650
+  Success: Generated 40 AST spans
+Progress: 650/974 processed (Success: 650, Errors: 0)
+Processing task 700/974: MBPP/700
+  Success: Generated 31 AST spans
+Progress: 700/974 processed (Success: 700, Errors: 0)
+Processing task 750/974: MBPP/750
+  Success: Generated 13 AST spans
+Progress: 750/974 processed (Success: 750, Errors: 0)
+Processing task 800/974: MBPP/800
+  Success: Generated 14 AST spans
+Progress: 800/974 processed (Success: 800, Errors: 0)
+Processing task 850/974: MBPP/850
+  Success: Generated 66 AST spans
+Progress: 850/974 processed (Success: 850, Errors: 0)
+Processing task 900/974: MBPP/900
+  Success: Generated 22 AST spans
+Progress: 900/974 processed (Success: 900, Errors: 0)
+Processing task 950/974: MBPP/950
+  Success: Generated 221 AST spans
+Progress: 950/974 processed (Success: 950, Errors: 0)
+
+Creating DataFrame...
+Saving to /data/home/zhangsj/Data/MBPP/mbpp_ast_parsed.parquet...
+
+============================================================
+Processing complete!
+  Total tasks: 974
+  Successfully parsed: 974
+  Failed to parse: 0
+  Success rate: 100.0%
+  Output saved to: /data/home/zhangsj/Data/MBPP/mbpp_ast_parsed.parquet
+============================================================

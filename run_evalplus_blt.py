@@ -31,7 +31,7 @@ for i, arg in enumerate(sys.argv[1:], 1):
 if _gpu_arg is not None:
     os.environ["CUDA_VISIBLE_DEVICES"] = _gpu_arg
 elif "CUDA_VISIBLE_DEVICES" not in os.environ:
-    os.environ["CUDA_VISIBLE_DEVICES"] = "5"  # Default to GPU 7
+    os.environ["CUDA_VISIBLE_DEVICES"] = "7"  # Default to GPU 7
 
 import argparse
 import json

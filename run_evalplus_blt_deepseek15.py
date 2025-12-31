@@ -315,7 +315,7 @@ def parse_args() -> argparse.Namespace:
 
     # Outputs
     parser.add_argument("--output", type=str, default="", help="Output file path (if not provided, uses timestamp-based path)")
-    parser.add_argument("--output_dir", type=str, default="/data/home/zhangsj/evalplus_results", help="Base output directory")
+    parser.add_argument("--output_dir", type=str, default="/data/home/zhangsj/AST_decoding/deepseek_passat1", help="Base output directory")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output files")
 
     # HF backend-only knobs
@@ -344,12 +344,21 @@ def main():
     use_local_decoder = args.use_local_decoder and not args.disable_local_decoder
     
     # If disabling local decoder, also set patcher to "none" for base model evaluation
+    # and enable n-gram blocking to prevent repetition loops
     if args.disable_local_decoder:
         if args.patcher != "none":
             print(f"Warning: --disable_local_decoder is set, but patcher is '{args.patcher}'. Setting patcher to 'none' for base model evaluation.")
             patcher = "none"
         else:
             patcher = "none"
+        # Enable n-gram blocking by default for base models to prevent repetition
+        if args.no_repeat_ngram_size == 0:
+            print(f"Info: Enabling n-gram blocking (size=3) for base model evaluation to prevent repetition loops.")
+            args.no_repeat_ngram_size = 3
+        # Also enable a small repetition penalty if not set
+        if args.repetition_penalty == 1.0:
+            print(f"Info: Enabling repetition penalty (1.1) for base model evaluation to prevent repetition loops.")
+            args.repetition_penalty = 1.1
     else:
         patcher = args.patcher
 
@@ -442,10 +451,16 @@ def main():
 
         print(f"HF backend enabled. Base model: {args.checkpoint}")
         print(f"Generating solutions for {len(problems)} tasks using HF backend...")
+        # For base model evaluation, default to force_base_prompt=True (direct completion)
+        # This avoids chat template issues when instruction_prefix/response_prefix are not set.
+        # The --force_base_prompt flag is already set by default via action="store_true",
+        # but we'll ensure it's True for base model evaluation.
+        use_force_base_prompt = True  # Always use direct completion for base models
+        print(f"Using force_base_prompt={use_force_base_prompt} for direct completion mode")
         model = HuggingFaceDecoder(
             name=args.checkpoint,
             dataset=args.dataset,
-            force_base_prompt=bool(args.force_base_prompt),
+            force_base_prompt=use_force_base_prompt,
             attn_implementation=str(args.attn_implementation),
             device_map=None,
             batch_size=1,
@@ -484,6 +499,22 @@ def main():
         print(f"Loading model from checkpoint: {args.checkpoint}")
         print(f"[DEBUG] Checkpoint path (normalized): {os.path.normpath(args.checkpoint)}")
         print(f"[DEBUG] Checkpoint exists: {os.path.exists(args.checkpoint)}")
+        
+        # Load generation config from model directory if available
+        import json
+        generation_config_path = os.path.join(args.checkpoint if os.path.isdir(args.checkpoint) else args.model_path, "generation_config.json")
+        if os.path.exists(generation_config_path):
+            print(f"[INFO] Loading generation config from: {generation_config_path}")
+            with open(generation_config_path, 'r') as f:
+                gen_config = json.load(f)
+            # Override default args with config values if not explicitly set
+            if args.temperature == 0.0 and 'temperature' in gen_config:
+                args.temperature = gen_config['temperature']
+                print(f"[INFO] Using temperature={args.temperature} from generation_config.json")
+            if args.top_p == 1.0 and 'top_p' in gen_config:
+                args.top_p = gen_config['top_p']
+                print(f"[INFO] Using top_p={args.top_p} from generation_config.json")
+        
         adapter, tokenizer = load_adapter_and_tokenizer(
             checkpoint_path=args.checkpoint,
             model_path=args.model_path,
@@ -574,7 +605,17 @@ def main():
             print(f"[DEBUG]   First task_id: {samples[0].get('task_id', 'N/A')}")
             first_solution = samples[0].get('solution', '')
             print(f"[DEBUG]   First solution length: {len(first_solution)} chars")
-            print(f"[DEBUG]   First solution preview: {first_solution[:100]}...")
+            print(f"[DEBUG]   First solution preview: {first_solution[:200]}...")
+            # Check if solution contains the prompt
+            first_prompt = problems.get(samples[0].get('task_id', ''), {}).get('prompt', '')
+            if first_prompt:
+                if first_solution.startswith(first_prompt):
+                    completion_only = first_solution[len(first_prompt):].strip()
+                    print(f"[DEBUG]   Completion-only length: {len(completion_only)} chars")
+                    print(f"[DEBUG]   Completion preview: {completion_only[:200]}...")
+                else:
+                    print(f"[DEBUG]   WARNING: Solution does not start with prompt!")
+                    print(f"[DEBUG]   Prompt starts with: {first_prompt[:100]}...")
             # Compute a simple hash of first sample for comparison
             first_sample_hash = hashlib.md5(json.dumps(samples[0], sort_keys=True).encode()).hexdigest()[:8]
             print(f"[DEBUG]   First sample hash (MD5 first 8 chars): {first_sample_hash}")

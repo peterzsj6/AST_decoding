@@ -9,10 +9,10 @@ Goal: Train span-by-span code generation with minimal losses:
 No LM CE, KL, or InfoNCE losses - just the essentials for span decoding.
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 import os
 if 'LOCAL_RANK' not in os.environ:
-    os.environ['CUDA_VISIBLE_DEVICES'] = '7'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 # Avoid HuggingFace tokenizer's "forked after parallelism" spam when DataLoader uses multiprocessing.
 # This must be set before any `transformers`/`tokenizers` usage.
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -72,7 +72,7 @@ class FocusedPythonASTSpanDataset(Dataset):
     """
     def __init__(
         self, 
-        parquet_file_path: str, 
+        parquet_file_path: Union[str, List[str]], 
         tokenizer, 
         max_length: int = 512,
         min_span_len: int = 1,
@@ -94,11 +94,24 @@ class FocusedPythonASTSpanDataset(Dataset):
         
         # Types to filter if filter_trivial_types is True
         self.trivial_types = {'punctuation', 'operator', '=', 'in', 'is', 'is not', 'not in'}
-        
-        if not os.path.exists(parquet_file_path):
-            raise FileNotFoundError(f"Parquet not found: {parquet_file_path}")
-        
-        self.df = pd.read_parquet(parquet_file_path)
+
+        # Support single parquet path or multiple parquet paths
+        if isinstance(parquet_file_path, (list, tuple)):
+            parquet_paths: List[str] = [str(p) for p in parquet_file_path]
+        else:
+            parquet_paths = [str(parquet_file_path)]
+
+        missing = [p for p in parquet_paths if not os.path.exists(p)]
+        if missing:
+            raise FileNotFoundError(f"Parquet not found: {missing}")
+
+        dfs = []
+        per_file_counts = []
+        for p in parquet_paths:
+            df_i = pd.read_parquet(p)
+            per_file_counts.append((p, int(len(df_i))))
+            dfs.append(df_i)
+        self.df = pd.concat(dfs, ignore_index=True) if len(dfs) > 1 else dfs[0]
         
         # Filter rows
         content_filter = (self.df['content'].notna()) & (self.df['content'].str.strip() != '')
@@ -108,8 +121,16 @@ class FocusedPythonASTSpanDataset(Dataset):
             self.df = self.df[content_filter]
         ast_span_filter = (self.df['AST_span'].notna()) & (self.df['AST_span'].str.len() > 2)
         self.df = self.df[ast_span_filter]
-        
-        print(f"[Dataset] Loaded {len(self.df)} samples")
+
+        if len(per_file_counts) > 1:
+            print("[Dataset] Loaded multiple parquets:")
+            for p, n in per_file_counts:
+                print(f"[Dataset]   - {p}: {n} rows (pre-filter)")
+            print(f"[Dataset]   => concatenated: {sum(n for _, n in per_file_counts)} rows (pre-filter)")
+        else:
+            print(f"[Dataset] Loaded parquet: {parquet_paths[0]}")
+
+        print(f"[Dataset] Loaded {len(self.df)} samples (post-filter)")
         print(f"[Dataset] min_span_len={min_span_len}, max_span_len={max_span_len}, filter_trivial={filter_trivial_types}")
 
     def __len__(self):
@@ -311,7 +332,13 @@ def train_focused():
     """
     parser = argparse.ArgumentParser(description="Focused BLT Adapter Training")
     parser.add_argument("--model_path", type=str, default="/data/home/zhangsj/AST_decoding")
-    parser.add_argument("--parquet", type=str, default="/data/home/zhangsj/Data/more_big_code_language/python/python_ast_parsed.parquet")
+    parser.add_argument(
+        "--parquet",
+        type=str,
+        nargs="+",
+        default=["/data/home/zhangsj/Data/more_big_code_language/python/python_ast_parsed.parquet"],
+        help="One or more training parquet files. If multiple are provided, they are concatenated and mixed; DataLoader(shuffle=True) shuffles across the union each epoch.",
+    )
     parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=16)
@@ -319,7 +346,7 @@ def train_focused():
     parser.add_argument("--max_length", type=int, default=328)
     parser.add_argument("--dtype", type=str, default="auto", choices=["auto", "bf16", "fp16", "fp32"])
     parser.add_argument("--log_dir", type=str, default=None)
-    parser.add_argument("--trial_name", type=str, default="test_1")
+    parser.add_argument("--trial_name", type=str, default="No_LM_CE")
     
     # Span filtering
     parser.add_argument("--min_span_len", type=int, default=1, help="Minimum span length in tokens")
@@ -328,7 +355,7 @@ def train_focused():
     parser.add_argument("--max_nodes_per_sample", type=int, default=64, help="Max nodes per sample for memory")
     
     # Loss weights (only the 3 essential losses)
-    parser.add_argument("--lm_weight", type=float, default=0.4, help="Global LM CE loss weight")
+    parser.add_argument("--lm_weight", type=float, default=0, help="Global LM CE loss weight")
     parser.add_argument("--warmup_lm_weight", type=float, default=0.0, help="LM CE weight during warmup")
     parser.add_argument("--node_recon_weight", type=float, default=0.4)
     parser.add_argument("--boundary_weight", type=float, default=0.2)
@@ -376,7 +403,7 @@ def train_focused():
     parser.add_argument(
         "--local_decoder_train_mode",
         type=str,
-        default="self_condition",
+        default="teacher",
         choices=["teacher", "self_condition"],
         help="Training mode for local decoder inputs. 'self_condition' reduces exposure bias by conditioning on the model's own predicted tokens.",
     )
@@ -398,7 +425,7 @@ def train_focused():
         # - "ast_start" makes the boundary head fire on *every* AST span start => extremely high patch rate at inference.
         # - "rewrite_worthy" gates positives to spans where the global model actually differs from gold (teacher-forced),
         #   which aligns much better with patch-at-inference semantics.
-        default="rewrite_worthy",
+        default="ast_start",
         choices=["ast_start", "rewrite_worthy"],
         help="Boundary target mode. 'rewrite_worthy' trains boundary head to fire only on spans where global predictions differ from gold.",
     )
@@ -419,14 +446,14 @@ def train_focused():
     parser.add_argument(
         "--boundary_feature_mode",
         type=str,
-        default="concat_mid_last",
+        default="last",
         choices=["last", "concat_mid_last"],
         help="Boundary feature mode. 'concat_mid_last' concatenates mid-layer and last-layer hidden states then projects to H.",
     )
     parser.add_argument(
         "--boundary_mid_layer",
         type=int,
-        default=-2,
+        default=14,
         help="Which global hidden_state index to use as 'mid' for boundary features (Python indexing over outputs.hidden_states).",
     )
 
@@ -454,6 +481,19 @@ def train_focused():
     
     # Local decoder configuration
     parser.add_argument("--local_num_layers", type=int, default=2, help="Number of local decoder layers")
+    # Chunking for local decoder projection to vocab (memory/speed tradeoff)
+    parser.add_argument("--node_ce_chunk_tokens", type=int, default=328,
+                        help="Chunk size (#token positions) when projecting local-decoder hidden states to vocab for CE. Larger=faster, more VRAM.")
+    parser.add_argument("--node_argmax_chunk_tokens", type=int, default=328,
+                        help="Chunk size (#token positions) when computing argmax over vocab for self-conditioning. Larger=faster, more VRAM.")
+    parser.add_argument("--node_logits_mode", type=str, default="auto", choices=["auto", "full", "chunked"],
+                        help="How to compute local-decoder vocab projection for CE/argmax. 'full' is fastest but can OOM on span-heavy batches. 'auto' uses full below a token threshold.")
+    parser.add_argument("--node_full_logits_max_tokens", type=int, default=4096,
+                        help="When --node_logits_mode=auto, use full logits if #valid positions <= this threshold, else chunked.")
+    parser.add_argument("--node_compute_teacher_ce", action="store_true", default=False,
+                        help="If set, compute teacher_ce (monitoring-only). Disabling can improve speed.")
+    parser.add_argument("--node_teacher_ce_max_tokens", type=int, default=1024,
+                        help="Cap teacher_ce computation to at most this many valid positions (monitoring-only).")
     
     # Validation (use pre-parsed parquet file from preprocess_validation_data.py)
     parser.add_argument("--val_split", type=float, default=0.0, help="Split this fraction from train for validation (default: 0, use HumanEval only)")
@@ -539,6 +579,9 @@ def train_focused():
         boundary_class_weight_tensor = torch.tensor([1.0, float(args.boundary_class_weight)], dtype=torch.float32)
         print(f"[setup] Using boundary class weights: [non-boundary=1.0, boundary={args.boundary_class_weight:.2f}]")
     
+    # Device and dtype (define early for resume code)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
     # Create model
     if args.resume_from and os.path.isdir(args.resume_from):
         print(f"[setup] Resuming from checkpoint: {args.resume_from}")
@@ -565,7 +608,12 @@ def train_focused():
             pass
         # Update boundary loss settings if specified
         if boundary_class_weight_tensor is not None:
-            adapter.register_buffer('boundary_class_weight', boundary_class_weight_tensor.to(adapter.boundary_head.weight.device))
+            # Use adapter's current device if boundary_head exists, otherwise use device
+            if hasattr(adapter, 'boundary_head') and adapter.boundary_head is not None:
+                target_device = adapter.boundary_head.weight.device
+            else:
+                target_device = device
+            adapter.register_buffer('boundary_class_weight', boundary_class_weight_tensor.to(target_device))
         if args.boundary_focal_gamma > 0.0:
             adapter.boundary_focal_gamma = float(args.boundary_focal_gamma)
             print(f"[setup] Using focal loss with gamma={args.boundary_focal_gamma}")
@@ -580,9 +628,6 @@ def train_focused():
         )
         if args.boundary_focal_gamma > 0.0:
             print(f"[setup] Using focal loss with gamma={args.boundary_focal_gamma}")
-    
-    # Device and dtype
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     if device == "cuda":
         try:
             dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() and args.dtype in ("auto", "bf16") else (
@@ -1095,6 +1140,32 @@ def train_focused():
             except Exception:
                 adapter.local_decoder_train_mode = "teacher"
                 adapter.local_decoder_self_condition_p = 0.0
+
+            # Local node recon chunk sizes (used inside `blt_adapter_model.py`)
+            try:
+                adapter.node_ce_chunk_tokens = int(getattr(args, "node_ce_chunk_tokens", 328))
+            except Exception:
+                adapter.node_ce_chunk_tokens = 328
+            try:
+                adapter.node_argmax_chunk_tokens = int(getattr(args, "node_argmax_chunk_tokens", 328))
+            except Exception:
+                adapter.node_argmax_chunk_tokens = 328
+            try:
+                adapter.node_logits_mode = str(getattr(args, "node_logits_mode", "auto"))
+            except Exception:
+                adapter.node_logits_mode = "auto"
+            try:
+                adapter.node_full_logits_max_tokens = int(getattr(args, "node_full_logits_max_tokens", 4096))
+            except Exception:
+                adapter.node_full_logits_max_tokens = 4096
+            try:
+                adapter.node_compute_teacher_ce = bool(getattr(args, "node_compute_teacher_ce", False))
+            except Exception:
+                adapter.node_compute_teacher_ce = False
+            try:
+                adapter.node_teacher_ce_max_tokens = int(getattr(args, "node_teacher_ce_max_tokens", 1024))
+            except Exception:
+                adapter.node_teacher_ce_max_tokens = 1024
 
             # Span-memory dropout schedule (train analogue of inference disable_local_encoder_only)
             try:

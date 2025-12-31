@@ -42,7 +42,7 @@ def select_dtype(device: str, preferred_dtype: str = "auto") -> torch.dtype:
         return torch.float16
 
 
-def load_adapter_and_tokenizer(checkpoint_path: str, model_path: str, device: str, dtype: torch.dtype, peft_adapter: Optional[str] = None) -> Tuple[BLTAdapterModel, Any]:
+def load_adapter_and_tokenizer(checkpoint_path: str, model_path: str, device: str, dtype: torch.dtype, peft_adapter: Optional[str] = None, low_cpu_mem_usage: bool = False) -> Tuple[BLTAdapterModel, Any]:
     """Load v2 BLTAdapterModel checkpoint + tokenizer."""
     # NOTE: peft_adapter is accepted for CLI parity but is currently ignored for v2.
     if os.path.isdir(checkpoint_path):
@@ -53,10 +53,11 @@ def load_adapter_and_tokenizer(checkpoint_path: str, model_path: str, device: st
         model = BLTAdapterModel.from_pretrained(
             checkpoint_path,
             torch_dtype=dtype,  # forwarded to base model
+            low_cpu_mem_usage=low_cpu_mem_usage,
         )
     else:
         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-        model = BLTAdapterModel.from_pretrained(model_path, torch_dtype=dtype)
+        model = BLTAdapterModel.from_pretrained(model_path, torch_dtype=dtype, low_cpu_mem_usage=low_cpu_mem_usage)
 
     if getattr(tokenizer, "pad_token", None) is None:
         try:
@@ -64,7 +65,19 @@ def load_adapter_and_tokenizer(checkpoint_path: str, model_path: str, device: st
         except Exception:
             pass
 
+    # Clear GPU cache before moving model to GPU to reduce fragmentation
+    if device == "cuda" and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    
+    # Move model to device and dtype
+    # Use no_sync to avoid unnecessary synchronization overhead
     model = model.to(device=device, dtype=dtype)
+    
+    # Clear cache again after loading to free any temporary allocations
+    if device == "cuda" and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
     model.eval()
     try:
         model.config.use_cache = True
@@ -142,11 +155,15 @@ def incremental_generate(
     min_rewrite_span_len: int = 8,
 ) -> Tuple[str, Dict[str, Any]]:
     """Incremental generation with optional learned boundary patching for v2 model."""
-
+    
+    # For code completion, use direct prompt (no chat template)
+    # Chat templates are typically for conversational tasks, not code completion
+    # The prompt from EvalPlus is already formatted for direct completion
+    
     enc = tokenizer(
         prompt_text,
         return_tensors="pt",
-        add_special_tokens=False,
+        add_special_tokens=False,  # Don't add special tokens for code completion
         truncation=True,
         max_length=4096,
     )
@@ -182,6 +199,11 @@ def incremental_generate(
 
     boundary_events: List[Dict[str, Any]] = []
     eos_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else getattr(model.config, "eos_token_id", None)
+    
+    # Repetition detection: track recent tokens to detect loops
+    recent_tokens: List[int] = []
+    max_recent_window = 50  # Check last 50 tokens for repetition
+    repetition_threshold = 0.8  # If 80% of recent tokens are repeats, stop
 
     for _ in range(int(max_new_tokens)):
         out = model.base_model(
@@ -192,9 +214,11 @@ def incremental_generate(
             return_dict=True,
         )
         logits = out.logits[:, -1, :]  # [1,V]
+        # Only apply repetition penalty to generated tokens (not the prompt)
+        generated_ids_only = input_ids[:, prompt_len:] if input_ids.size(1) > prompt_len else input_ids
         logits = _apply_repetition_penalty_and_ngram_blocking(
             logits,
-            input_ids,
+            generated_ids_only,
             repetition_penalty=float(repetition_penalty),
             no_repeat_ngram_size=int(no_repeat_ngram_size),
         )
@@ -209,9 +233,46 @@ def incremental_generate(
         if input_ids.size(1) > prompt_len:
             node_buffer.append(next_id)
         steps_since_patch += 1
+        
+        # Repetition detection: check if we're stuck in a loop
+        if total_tokens > 20:  # Only check after generating some tokens
+            recent_tokens.append(next_id)
+            if len(recent_tokens) > max_recent_window:
+                recent_tokens.pop(0)
+            
+            # Simple repetition check: decode recent tokens and look for repeated phrases
+            if len(recent_tokens) >= 30 and total_tokens % 10 == 0:  # Check every 10 tokens after 30
+                recent_text = tokenizer.decode(recent_tokens[-30:], skip_special_tokens=False)
+                # Check for obvious repetition patterns (same line/phrase repeating)
+                lines = recent_text.split('\n')
+                if len(lines) >= 3:
+                    # Check if last few lines are identical
+                    if len(set(lines[-3:])) == 1 and len(lines[-1].strip()) > 10:
+                        print(f"[WARNING] Detected repetition loop (same line repeating), stopping generation early (token {total_tokens})")
+                        break
+                # Check for repeated words/phrases
+                words = recent_text.split()
+                if len(words) >= 10:
+                    # Check if we see the same 5-word sequence multiple times
+                    for i in range(len(words) - 5):
+                        phrase = ' '.join(words[i:i+5])
+                        if recent_text.count(phrase) >= 3:  # Same phrase appears 3+ times
+                            print(f"[WARNING] Detected repetition loop (repeated phrase), stopping generation early (token {total_tokens})")
+                            break
+                    else:
+                        continue
+                    break
 
         if eos_id is not None and next_id == int(eos_id):
             break
+        
+        # Additional stopping criteria for code completion: stop if we see triple backticks (markdown code blocks)
+        # This helps prevent the model from generating explanations after code
+        if total_tokens > 10:  # Only check after generating some tokens
+            recent_text = tokenizer.decode(input_ids[0, max(0, input_ids.size(1) - 20):], skip_special_tokens=False)
+            if "```" in recent_text and recent_text.count("```") >= 2:
+                # Found closing code block, likely done with code generation
+                break
 
         if patcher == "learned" and use_local_decoder and steps_since_patch >= int(min_steps_between_patches):
             hs = out.hidden_states[-1]  # [1,L,H] for sequence BEFORE append
@@ -266,6 +327,8 @@ def incremental_generate(
                         current_node_start_idx = int(input_ids.size(1))
                         steps_since_patch = 0
 
+    # Decode the full sequence (prompt + completion)
+    # EvalPlus expects the full code in the "solution" field (see evaluate.py line 220-224)
     text = tokenizer.decode(input_ids[0], skip_special_tokens=True)
     stats: Dict[str, Any] = {
         "fired_boundaries": int(fired_boundaries),
