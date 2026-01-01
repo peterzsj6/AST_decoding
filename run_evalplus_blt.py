@@ -31,7 +31,7 @@ for i, arg in enumerate(sys.argv[1:], 1):
 if _gpu_arg is not None:
     os.environ["CUDA_VISIBLE_DEVICES"] = _gpu_arg
 elif "CUDA_VISIBLE_DEVICES" not in os.environ:
-    os.environ["CUDA_VISIBLE_DEVICES"] = "7"  # Default to GPU 7
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Default to GPU 7
 
 import argparse
 import json
@@ -40,19 +40,40 @@ from datetime import datetime
 from typing import Dict, Any, List
 
 # Make project root importable
-PROJECT_ROOT = "/data/home/zhangsj"
+# Try to detect the project root dynamically based on script location
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+# Ensure this directory is importable (so we can `import blt_inference` when running as a script)
+if _script_dir not in sys.path:
+    sys.path.insert(0, _script_dir)
+
+# If script is at /data/AST_decoding/run_evalplus_blt.py, project root should be /data
+# Check if we're in AST_decoding directory
+if os.path.basename(_script_dir) == "AST_decoding":
+    PROJECT_ROOT = os.path.dirname(_script_dir)  # Parent of AST_decoding
+else:
+    # Fallback to hardcoded path if structure is different
+    PROJECT_ROOT = "/data/home/zhangsj"
+
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # Make local EvalPlus repo importable (uninstalled source tree).
 # Prefer the vendored copy inside this repo (contains local patches / bugfixes),
 # fallback to the older external path if needed.
+EVALPLUS_SRC_VENDOR_LOCAL = os.path.join(_script_dir, "evalplus", "evalplus")
+EVALPLUS_PARENT_VENDOR_LOCAL = os.path.join(_script_dir, "evalplus")
 EVALPLUS_SRC_VENDOR = "/data/home/zhangsj/AST_decoding/evalplus/evalplus"
 EVALPLUS_PARENT_VENDOR = "/data/home/zhangsj/AST_decoding/evalplus"
 EVALPLUS_SRC_FALLBACK = "/data/home/zhangsj/qwen_coder_1.5b/evalplus/evalplus"
 EVALPLUS_PARENT_FALLBACK = "/data/home/zhangsj/qwen_coder_1.5b/evalplus"
 
-if os.path.isdir(EVALPLUS_SRC_VENDOR):
+# Try local evalplus first, then fallback paths
+if os.path.isdir(EVALPLUS_SRC_VENDOR_LOCAL):
+    if EVALPLUS_SRC_VENDOR_LOCAL not in sys.path:
+        sys.path.insert(0, EVALPLUS_SRC_VENDOR_LOCAL)
+    if EVALPLUS_PARENT_VENDOR_LOCAL not in sys.path:
+        sys.path.insert(0, EVALPLUS_PARENT_VENDOR_LOCAL)
+elif os.path.isdir(EVALPLUS_SRC_VENDOR):
     if EVALPLUS_SRC_VENDOR not in sys.path:
         sys.path.insert(0, EVALPLUS_SRC_VENDOR)
     if EVALPLUS_PARENT_VENDOR not in sys.path:
@@ -66,12 +87,22 @@ else:
 import torch
 
 # Reuse loader and generation utilities
-from AST_decoding.blt_inference import (  # type: ignore
-    select_device,
-    select_dtype,
-    load_adapter_and_tokenizer,
-    incremental_generate,
-)
+try:
+    # Works when running as `python -m AST_decoding.run_evalplus_blt` or when /data is on PYTHONPATH
+    from AST_decoding.blt_inference import (  # type: ignore
+        select_device,
+        select_dtype,
+        load_adapter_and_tokenizer,
+        incremental_generate,
+    )
+except ModuleNotFoundError:
+    # Works when running as `python /data/AST_decoding/run_evalplus_blt.py`
+    from blt_inference import (  # type: ignore
+        select_device,
+        select_dtype,
+        load_adapter_and_tokenizer,
+        incremental_generate,
+    )
 
 # EvalPlus imports (from local repo)
 from evalplus.data.humaneval import get_human_eval_plus  # type: ignore
@@ -167,6 +198,11 @@ def generate_solutions_for_tasks(
                 tokens = 0
                 boundary_rate = 0.0
                 stats = {}
+
+            # Be robust: generation can sometimes return None (e.g., upstream failure paths).
+            # EvalPlus expects string solutions; storing None can crash later steps.
+            if generated_full is None:
+                generated_full = ""
             
             # Sanitize the generated code if requested
             if sanitize_code:
@@ -236,7 +272,7 @@ def parse_args() -> argparse.Namespace:
     )
     # Model loading
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to saved adapter checkpoint (epoch folder) or base model path")
-    parser.add_argument("--model_path", type=str, default="/data/home/zhangsj/AST_decoding", help="Base Qwen2.5 path")
+    parser.add_argument("--model_path", type=str, default="/data/qwen2.5coder", help="Base Qwen2.5 path")
     parser.add_argument("--peft_adapter", type=str, default="", help="Optional PEFT LoRA adapter directory")
     parser.add_argument("--gpu", type=int, default=5, help="GPU device ID to use (sets CUDA_VISIBLE_DEVICES before importing PyTorch)")
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cuda", "cpu"], help="Device to use. GPU selection is handled by CUDA_VISIBLE_DEVICES")
@@ -339,6 +375,28 @@ def main():
     
     # Show what GPU is being used (already set before torch import)
     current_cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "not set")
+
+    # --- UX guardrails for "base model" runs ---
+    # Users often intend to evaluate a plain HF base model (e.g. /data/qwen2.5coder)
+    # but forget to set `--backend hf` and instead pass `--disable_local_decoder`.
+    # In that case, the BLT backend will try to run `incremental_generate()` with a
+    # BLTAdapterModel wrapper, which can yield empty generations / misleading results.
+    def _looks_like_hf_model_dir(p: str) -> bool:
+        try:
+            return bool(p) and os.path.isdir(p) and os.path.isfile(os.path.join(p, "config.json"))
+        except Exception:
+            return False
+
+    if args.backend == "blt" and bool(args.disable_local_decoder):
+        # Heuristic: if --checkpoint looks like an HF model directory while --model_path does not,
+        # the user most likely wants HF backend base-model evaluation.
+        if _looks_like_hf_model_dir(str(args.checkpoint)) and not _looks_like_hf_model_dir(str(args.model_path)):
+            print(
+                "[setup] Detected a base-model HF directory passed via --checkpoint together with --disable_local_decoder. "
+                "Switching backend to 'hf' for plain base-model evaluation. "
+                "Tip: you can explicitly pass `--backend hf` and omit `--disable_local_decoder`."
+            )
+            args.backend = "hf"
 
     # Handle local decoder flag
     use_local_decoder = args.use_local_decoder and not args.disable_local_decoder
@@ -572,9 +630,13 @@ def main():
             print(f"[DEBUG] Sample file info:")
             print(f"[DEBUG]   Total samples: {len(samples)}")
             print(f"[DEBUG]   First task_id: {samples[0].get('task_id', 'N/A')}")
-            first_solution = samples[0].get('solution', '')
-            print(f"[DEBUG]   First solution length: {len(first_solution)} chars")
-            print(f"[DEBUG]   First solution preview: {first_solution[:100]}...")
+            first_solution = samples[0].get("solution", "")
+            # Be robust: some upstream generation/sanitization failures can yield None.
+            if first_solution is None:
+                first_solution = ""
+            first_solution_str = str(first_solution)
+            print(f"[DEBUG]   First solution length: {len(first_solution_str)} chars")
+            print(f"[DEBUG]   First solution preview: {first_solution_str[:100]}...")
             # Compute a simple hash of first sample for comparison
             first_sample_hash = hashlib.md5(json.dumps(samples[0], sort_keys=True).encode()).hexdigest()[:8]
             print(f"[DEBUG]   First sample hash (MD5 first 8 chars): {first_sample_hash}")

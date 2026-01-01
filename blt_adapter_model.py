@@ -632,8 +632,14 @@ class BLTAdapterModel(Qwen2ForCausalLM):
         # Compute token embeddings
         # - global_inputs_embeds: regular base embedding for the global transformer
         # - node_inputs_embeds: node token encoder outputs for span/node processing
+        #
+        # IMPORTANT (inference perf):
+        # `node_token_encoder(...)` is only needed when we actually compute span/node losses
+        # (i.e., when span_metadata is provided). For plain LM inference, skipping it
+        # saves a substantial amount of compute per token.
         global_inputs_embeds = self.model.embed_tokens(input_ids)  # [B, L, H]
-        node_inputs_embeds = self.node_token_encoder(input_ids, span_metadata)  # [B, L, H]
+        if span_metadata is not None:
+            _ = self.node_token_encoder(input_ids, span_metadata)  # [B, L, H]
 
         # Forward through global transformer using inputs_embeds
         filtered_kwargs = {
